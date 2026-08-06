@@ -187,7 +187,7 @@ def add_giveaway(message_id: int, channel_id: int, guild_id: int, prize: str, wi
     conn.close()
 
 def toggle_giveaway_participant(message_id: int, user_id: int) -> bool:
-    """İstifadəçini çəkilişə əlavə edir və ya çıxarır. Əgər əlavə olundusa True, çıxarıldısa False qaytarır."""
+    """İstifadəçini çəkilişə əlavə edir və ya çıxarır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT 1 FROM giveaway_participants WHERE message_id = ? AND user_id = ?", (message_id, user_id))
@@ -301,13 +301,114 @@ async def check_giveaways():
                 await msg.edit(embed=embed, view=None)
                 await channel.send(f"🎊 **TEBRİKLƏR!** {winner_mentions}\nSiz **{prize}** çəkilişində qalib gəldiniz! 🥳")
 
+# ==========================================
+# GIVEAWAY GROUP COMMANDS (/giveaway start/reroll/end)
+# ==========================================
+giveaway_group = app_commands.Group(name="giveaway", description="Çəkiliş idarəetmə əmrləri")
+
+@giveaway_group.command(name="start", description="[Admin] Yeni çəkiliş başladın.")
+@app_commands.describe(
+    duration="Çəkiliş vaxtı (məs: 10s, 5m, 2h, 1d)",
+    winners="Qalib sayı (məs: 1)",
+    prize="Mükafatın adı"
+)
+async def giveaway_start_slash(interaction: discord.Interaction, duration: str, winners: int, prize: str):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ Bu əmri istifadə etmək üçün Mesajları İdarə Et hüququnuz olmalıdır!", ephemeral=True)
+        return
+
+    seconds = parse_duration(duration)
+    if seconds <= 0:
+        await interaction.response.send_message("❌ Yanlış vaxt formatı! Nümunə: `10m` (10 dəqiqə), `2h` (2 saat), `1d` (1 gün).", ephemeral=True)
+        return
+
+    if winners <= 0:
+        await interaction.response.send_message("❌ Qalib sayı ən azı 1 olmalıdır!", ephemeral=True)
+        return
+
+    end_timestamp = int(time.time()) + seconds
+
+    embed = discord.Embed(
+        title=f"🎉 ÇƏKİLİŞ: {prize}",
+        description=f"Qatılmaq üçün aşağıdakı **🎉 Çəkilişə Qatıl** düyməsinə klikləyin!\n\n"
+                    f"🏆 **Qalib Sayı:** `{winners}`\n"
+                    f"⏱️ **Bitiş Vaxtı:** <t:{end_timestamp}:R> (<t:{end_timestamp}:f>)\n"
+                    f"👑 **Təşkilatçı:** {interaction.user.mention}",
+        color=discord.Color.blurple()
+    )
+    embed.set_footer(text="Qafqaz Community Giveaway System")
+
+    await interaction.response.send_message(embed=embed)
+    msg = await interaction.original_response()
+    view = GiveawayView(message_id=msg.id)
+    await msg.edit(view=view)
+
+    add_giveaway(msg.id, interaction.channel_id, interaction.guild_id, prize, winners, end_timestamp)
+
+@giveaway_group.command(name="reroll", description="[Admin] Bitmiş çəkilişdə yeni qalib seçin.")
+@app_commands.describe(message_id="Çəkiliş mesajının ID-si")
+async def giveaway_reroll_slash(interaction: discord.Interaction, message_id: str):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ Bu əmri istifadə etmək üçün hüququnuz çatmir!", ephemeral=True)
+        return
+
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await interaction.response.send_message("❌ Yanlış Mesaj ID-si!", ephemeral=True)
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT prize, winner_count FROM giveaways WHERE message_id = ?", (msg_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        await interaction.response.send_message("❌ Bu ID ilə çəkiliş tapılmadı!", ephemeral=True)
+        return
+
+    prize, winner_count = row
+    participants = get_giveaway_participants(msg_id)
+
+    if not participants:
+        await interaction.response.send_message("❌ Bu çəkilişə heç kim qatılmadığı üçün yeni qalib seçilə bilməz!", ephemeral=True)
+        return
+
+    winners_count = min(len(participants), winner_count)
+    new_winners = random.sample(participants, winners_count)
+    winner_mentions = ", ".join([f"<@{uid}>" for uid in new_winners])
+
+    await interaction.response.send_message(f"🎉 **YENİ QALİB SEÇİLDİ!**\n**Mükafat:** {prize}\n**Yeni Qalib(lər):** {winner_mentions} 🥳")
+
+@giveaway_group.command(name="end", description="[Admin] Çəkilişi vaxtından əvvəl bitirin.")
+@app_commands.describe(message_id="Çəkiliş mesajının ID-si")
+async def giveaway_end_slash(interaction: discord.Interaction, message_id: str):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ Bu əmri istifadə etmək üçün hüququnuz çatmir!", ephemeral=True)
+        return
+
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await interaction.response.send_message("❌ Yanlış Mesaj ID-si!", ephemeral=True)
+        return
+
+    mark_giveaway_ended(msg_id)
+    await interaction.response.send_message("✅ Çəkiliş uğurla vaxtından əvvəl bitirildi!")
+
+bot.tree.add_command(giveaway_group)
+
+# ==========================================
+# ON READY
+# ==========================================
 @bot.event
 async def on_ready():
     init_db()
     # Web serveri arxa fonda başladırıq (Render Free Tier üçün)
     asyncio.create_task(start_web_server())
     
-    # Düzgün düymə idarəçiliyi üçün persistent view register edirik
+    # Persistent view register
     bot.add_view(GiveawayView())
     
     # Çəkiliş taymerini başladırıq
@@ -446,11 +547,8 @@ async def setlevelchannel(ctx: commands.Context, channel: discord.TextChannel):
     set_guild_level_channel(ctx.guild.id, channel.id)
     await ctx.send(f"✅ Səviyyə atlama bildirişləri artıq {channel.mention} kanalına göndəriləcək!")
 
-# ==========================================
-# GIVEAWAY (ÇƏKİLİŞ) ƏMRLƏRİ
-# ==========================================
-
-@bot.hybrid_command(name="gstart", description="[Admin] Yeni çəkiliş başlaşdırın.")
+# Alternativ Prefiks/Hybrid Çəkiliş Əmrləri
+@bot.hybrid_command(name="gstart", description="[Admin] Yeni çəkiliş başladın.")
 @commands.has_permissions(manage_messages=True)
 @app_commands.describe(
     duration="Çəkiliş vaxtı (məs: 10s, 5m, 2h, 1d)",
@@ -485,52 +583,6 @@ async def gstart(ctx: commands.Context, duration: str, winners: int, prize: str)
 
     add_giveaway(msg.id, ctx.channel.id, ctx.guild.id, prize, winners, end_timestamp)
 
-@bot.hybrid_command(name="greroll", description="[Admin] Bitmiş çəkilişdə yeni qalib seçin.")
-@commands.has_permissions(manage_messages=True)
-@app_commands.describe(message_id="Çəkiliş mesajının ID-si")
-async def greroll(ctx: commands.Context, message_id: str):
-    try:
-        msg_id = int(message_id)
-    except ValueError:
-        await ctx.send("❌ Yanlış Mesaj ID-si!", ephemeral=True)
-        return
-
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT prize, winner_count FROM giveaways WHERE message_id = ?", (msg_id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        await ctx.send("❌ Bu ID ilə çəkiliş tapılmadı!", ephemeral=True)
-        return
-
-    prize, winner_count = row
-    participants = get_giveaway_participants(msg_id)
-
-    if not participants:
-        await ctx.send("❌ Bu çəkilişə heç kim qatılmadığı üçün yeni qalib seçilə bilməz!")
-        return
-
-    winners_count = min(len(participants), winner_count)
-    new_winners = random.sample(participants, winners_count)
-    winner_mentions = ", ".join([f"<@{uid}>" for uid in new_winners])
-
-    await ctx.send(f"🎉 **YENİ QALİB SEÇİLDİ!**\n**Mükafat:** {prize}\n**Yeni Qalib(lər):** {winner_mentions} 🥳")
-
-@bot.hybrid_command(name="gend", description="[Admin] Çəkilişi vaxtından əvvəl bitirin.")
-@commands.has_permissions(manage_messages=True)
-@app_commands.describe(message_id="Çəkiliş mesajının ID-si")
-async def gend(ctx: commands.Context, message_id: str):
-    try:
-        msg_id = int(message_id)
-    except ValueError:
-        await ctx.send("❌ Yanlış Mesaj ID-si!", ephemeral=True)
-        return
-
-    mark_giveaway_ended(msg_id)
-    await ctx.send("✅ Çəkiliş uğurla vaxtından əvvəl bitirildi! (Növbəti yoxlamada qalib elan olunacaq)")
-
 @bot.hybrid_command(name="botinfo", description="Bot haqqında məlumat və server qaydalarını göstərir.")
 async def botinfo(ctx: commands.Context):
     embed = discord.Embed(
@@ -539,7 +591,7 @@ async def botinfo(ctx: commands.Context):
         color=discord.Color.green()
     )
     embed.add_field(name="📌 XP Əmrləri", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10 sıralaması\n`/setlevelchannel` - Level kanalı seçin", inline=False)
-    embed.add_field(name="🎉 Çəkiliş Əmrləri", value="`/gstart <vaxt> <qalib_sayı> <mükafat>` - Yeni çəkiliş\n`/greroll <message_id>` - Yeni qalib seç\n`/gend <message_id>` - Çəkilişi bitir", inline=False)
+    embed.add_field(name="🎉 Çəkiliş Əmrləri", value="`/giveaway start <vaxt> <qalib_sayı> <mükafat>`\n`/gstart <vaxt> <qalib_sayı> <mükafat>`", inline=False)
     embed.set_footer(text="Qafqaz Community Bot • Render 7/24 Hosting Ready")
 
     await ctx.send(embed=embed)
