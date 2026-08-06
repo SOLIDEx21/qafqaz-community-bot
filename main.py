@@ -45,7 +45,7 @@ async def start_web_server():
 DB_NAME = "qafqaz_community.db"
 
 def init_db():
-    """Məlumat bazasını və istifadəçi cədvəlini yaradır."""
+    """Məlumat bazasını, istifadəçi cədvəlini və tənzimləmələri yaradır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -58,11 +58,17 @@ def init_db():
             PRIMARY KEY (user_id, guild_id)
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS guild_settings (
+            guild_id INTEGER PRIMARY KEY,
+            level_channel_id INTEGER
+        )
+    """)
     conn.commit()
     conn.close()
 
 def get_user_data(user_id: int, guild_id: int):
-    """İstifadəçinin bazadakı məlumatlarını qaytarır. Əgər yoxdursa, yeni sətir yaradır."""
+    """İstifadəçinin bazadakı məlumatlarını qaytarır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT xp, level, last_msg FROM users WHERE user_id = ? AND guild_id = ?", (user_id, guild_id))
@@ -89,6 +95,27 @@ def update_user_data(user_id: int, guild_id: int, xp: int, level: int, last_msg:
     """, (xp, level, last_msg, user_id, guild_id))
     conn.commit()
     conn.close()
+
+def set_guild_level_channel(guild_id: int, channel_id: int):
+    """Server üçün səviyyə-atlama bildiriş kanalını bazada yadda saxlayır."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO guild_settings (guild_id, level_channel_id)
+        VALUES (?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET level_channel_id = excluded.level_channel_id
+    """, (guild_id, channel_id))
+    conn.commit()
+    conn.close()
+
+def get_guild_level_channel_id(guild_id: int):
+    """Serverin səviyyə bildiriş kanalının ID-sini qaytarır."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT level_channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 def get_user_rank(user_id: int, guild_id: int):
     """İstifadəçinin server üzrə sıralamasını (Rank) hesablayır."""
@@ -156,31 +183,51 @@ async def on_message(message: discord.Message):
 
     xp, level, last_msg = get_user_data(user_id, guild_id)
 
-    # Spamın qarşısını almaq üçün cooldown (60 saniyə)
-    if current_time - last_msg >= 60:
-        gained_xp = random.randint(15, 25)
-        new_xp = xp + gained_xp
-        needed_xp = xp_needed_for_level(level)
+    # HER MESAJA XP: Heç bir delay/cooldown olmadan hər mesaja 2 ilə 3 XP verilir
+    gained_xp = random.randint(2, 3)
+    new_xp = xp + gained_xp
+    needed_xp = xp_needed_for_level(level)
 
-        if new_xp >= needed_xp:
-            new_xp -= needed_xp
-            new_level = level + 1
-            update_user_data(user_id, guild_id, new_xp, new_level, current_time)
+    if new_xp >= needed_xp:
+        new_xp -= needed_xp
+        new_level = level + 1
+        update_user_data(user_id, guild_id, new_xp, new_level, current_time)
 
-            # Təbrik mesajı göndəririk (mention ilə)
-            embed = discord.Embed(
-                title="🎉 SƏVİYYƏ ATLANDI!",
-                description=f"Təbrik edirik {message.author.mention}!\nSənin aktivliyin **Qafqaz Community** serverində yüksəlir!",
-                color=discord.Color.gold()
-            )
-            embed.add_field(name="Yeni Səviyyə", value=f"🏆 **Level {new_level}**", inline=True)
-            embed.add_field(name="Növbəti Hədəf", value=f"✨ `{xp_needed_for_level(new_level)} XP`", inline=True)
-            embed.set_thumbnail(url=message.author.display_avatar.url)
-            embed.set_footer(text="Qafqaz Community Bot • XP System")
+        # Level atlama mesajı üçün kanalı təyin edirik
+        target_channel = None
+        saved_channel_id = get_guild_level_channel_id(guild_id)
+        
+        if saved_channel_id:
+            target_channel = message.guild.get_channel(saved_channel_id)
+        
+        # Əgər xüsusi kanal seçilməyibsə, adı "seviye-atlama" və ya benzer olan kanalı avtomatik axtarırıq
+        if target_channel is None:
+            for ch in message.guild.text_channels:
+                if "seviye" in ch.name.lower() or "level" in ch.name.lower():
+                    target_channel = ch
+                    break
 
-            await message.channel.send(content=f"Hey {message.author.mention}!", embed=embed)
-        else:
-            update_user_data(user_id, guild_id, new_xp, level, current_time)
+        # Əgər heç bir kanal tapılmazsa, mesajın yazıldığı kanala göndərilir
+        if target_channel is None:
+            target_channel = message.channel
+
+        # Təbrik mesajı göndəririk (mention ilə)
+        embed = discord.Embed(
+            title="🎉 SƏVİYYƏ ATLANDI!",
+            description=f"Təbrik edirik {message.author.mention}!\nSənin aktivliyin **Qafqaz Community** serverində yüksəlir!",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="Yeni Səviyyə", value=f"🏆 **Level {new_level}**", inline=True)
+        embed.add_field(name="Növbəti Hədəf", value=f"✨ `{xp_needed_for_level(new_level)} XP`", inline=True)
+        embed.set_thumbnail(url=message.author.display_avatar.url)
+        embed.set_footer(text="Qafqaz Community Bot • XP System")
+
+        try:
+            await target_channel.send(content=f"Hey {message.author.mention}!", embed=embed)
+        except Exception as e:
+            print(f"[ERROR] Level mesajı göndərilərkən xəta: {e}")
+    else:
+        update_user_data(user_id, guild_id, new_xp, level, current_time)
 
     # Prefiks əmrlərini işlətmək üçün vacibdir
     await bot.process_commands(message)
@@ -257,13 +304,26 @@ async def botinfo(ctx: commands.Context):
         description="Qafqaz Community serveri üçün xüsusi hazırlanmış XP və Level idarəetmə botu.",
         color=discord.Color.green()
     )
-    embed.add_field(name="📌 Əmrlər", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10 sıralaması\n`/botinfo` - Bot haqqında məlumat", inline=False)
-    embed.add_field(name="💡 XP Təlimatı", value="Kanallarda hər yazdığınız mesaja görə (60s cooldown ilə) 15-25 XP qazanırsınız.", inline=False)
+    embed.add_field(name="📌 Əmrlər", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10 sıralaması\n`/setlevelchannel` - Level atlama kanalını təyin edin\n`/botinfo` - Bot haqqında məlumat", inline=False)
+    embed.add_field(name="💡 XP Təlimatı", value="Kanallarda hər yazdığınız mesaja görə dərhal 2-3 XP qazanırsınız.", inline=False)
     embed.set_footer(text="Qafqaz Community Bot • Render 7/24 Hosting Ready")
 
     await ctx.send(embed=embed)
 
-# 4. ADMİN: XP ƏLAVƏ ET
+# 4. ADMİN: LEVEL ATLAMAK KANALINI TƏYİN ET
+@bot.hybrid_command(name="setlevelchannel", description="[Admin] Səviyyə atlama bildirişlərinin göndəriləcəyi kanalı seçin.")
+@commands.has_permissions(administrator=True)
+@app_commands.describe(channel="Level atlama bildirişlərinin düşəcəyi kanal")
+async def setlevelchannel(ctx: commands.Context, channel: discord.TextChannel):
+    set_guild_level_channel(ctx.guild.id, channel.id)
+    await ctx.send(f"✅ Səviyyə atlama bildirişləri artıq {channel.mention} kanalına göndəriləcək!")
+
+@setlevelchannel.error
+async def setlevelchannel_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Bu əmri istifadə etmək üçün Administrator hüququnuz olmalıdır!", ephemeral=True)
+
+# 5. ADMİN: XP ƏLAVƏ ET
 @bot.hybrid_command(name="addxp", description="[Admin] İstifadəçiyə XP əlavə et.")
 @commands.has_permissions(administrator=True)
 @app_commands.describe(member="XP verilməli olan istifadəçi", amount="Əlavə ediləcək XP miqdarı")
