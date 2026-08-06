@@ -10,6 +10,9 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
 
 DB_NAME = "qafqaz_community.db"
 
+LOGO_URL = "https://raw.githubusercontent.com/SOLIDEx21/qafqaz-community-bot/main/assets/logo.png"
+BANNER_URL = "https://raw.githubusercontent.com/SOLIDEx21/qafqaz-community-bot/main/assets/banner.png"
+
 def is_postgres():
     return bool(DATABASE_URL)
 

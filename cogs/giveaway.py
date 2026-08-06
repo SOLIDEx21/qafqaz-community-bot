@@ -58,6 +58,8 @@ class GiveawayCog(commands.Cog):
                         description=f"**Mükafat:** {prize}\n\n❌ Heç kim çəkilişə qatılmadığı üçün qalib seçilmədi.",
                         color=discord.Color.red()
                     )
+                    embed.set_thumbnail(url=db.LOGO_URL)
+                    embed.set_image(url=db.BANNER_URL)
                     await msg.edit(embed=embed, view=None)
                     await channel.send(f"⚠️ **{prize}** çəkilişi başa çatdı, lakin heç kim qatılmadığı üçün qalib seçilmədi!")
                 else:
@@ -70,6 +72,8 @@ class GiveawayCog(commands.Cog):
                         description=f"**Mükafat:** {prize}\n**Qalib(lər):** {winner_mentions}\n**Cəmi Qatılan:** `{len(participants)}` nəfər",
                         color=discord.Color.gold()
                     )
+                    embed.set_thumbnail(url=db.LOGO_URL)
+                    embed.set_image(url=db.BANNER_URL)
                     await msg.edit(embed=embed, view=None)
                     await channel.send(f"🎊 **TEBRİKLƏR!** {winner_mentions}\nSiz **{prize}** çəkilişində qalib gəldiniz! 🥳")
 
@@ -100,6 +104,8 @@ class GiveawayCog(commands.Cog):
                         f"👑 **Təşkilatçı:** {ctx.author.mention}",
             color=discord.Color.blurple()
         )
+        embed.set_thumbnail(url=db.LOGO_URL)
+        embed.set_image(url=db.BANNER_URL)
         embed.set_footer(text="Qafqaz Community Giveaway System")
 
         if ctx.interaction:
