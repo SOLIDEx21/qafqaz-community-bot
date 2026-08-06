@@ -226,6 +226,47 @@ def get_top_users(guild_id: int, limit: int = 10):
 def xp_needed_for_level(level: int) -> int:
     return (level + 1) * 100
 
+async def send_level_up_notice(member: discord.Member, new_level: int, new_roles: list, fallback_channel: discord.TextChannel = None):
+    """Level atlama kartını müvafiq kanala (seviye-atlama) tərəf göndərir."""
+    guild = member.guild
+    target_channel = None
+    saved_channel_id = get_guild_level_channel_id(guild.id)
+    
+    if saved_channel_id:
+        target_channel = guild.get_channel(saved_channel_id)
+    
+    if target_channel is None:
+        for ch in guild.text_channels:
+            if "seviye" in ch.name.lower() or "level" in ch.name.lower():
+                target_channel = ch
+                break
+
+    if target_channel is None:
+        target_channel = fallback_channel
+
+    if target_channel is None:
+        return
+
+    role_text = ""
+    if new_roles:
+        role_names = ", ".join([f"**{r.name}**" for r in new_roles])
+        role_text = f"\n🎖️ **Qazanılan Yeni Rol(lar):** {role_names}"
+
+    embed = discord.Embed(
+        title="🎉 SƏVİYYƏ ATLANDI!",
+        description=f"Təbrik edirik {member.mention}!\nSənin aktivliyin **Qafqaz Community** serverində yüksəlir!{role_text}",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="Yeni Səviyyə", value=f"🏆 **Level {new_level}**", inline=True)
+    embed.add_field(name="Növbəti Hədəf", value=f"✨ `{xp_needed_for_level(new_level)} XP`", inline=True)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text="Qafqaz Community Bot • XP System")
+
+    try:
+        await target_channel.send(content=f"Hey {member.mention}!", embed=embed)
+    except Exception as e:
+        print(f"[ERROR] Level mesajı göndərilərkən xəta: {e}")
+
 # --- Giveaway DB funksiyaları ---
 def add_giveaway(message_id: int, channel_id: int, guild_id: int, prize: str, winner_count: int, end_timestamp: int):
     conn = sqlite3.connect(DB_NAME)
@@ -457,7 +498,6 @@ async def on_ready():
     if not check_giveaways.is_running():
         check_giveaways.start()
 
-    # ANINDA (INSTANT) SLASH COMMAND SYNC
     try:
         global_synced = await bot.tree.sync()
         print(f"[GLOBAL SYNC] {len(global_synced)} qlobal slash əmri sinxronlaşdırıldı.")
@@ -498,41 +538,8 @@ async def on_message(message: discord.Message):
 
         # Level rolunu avtomatik veririk
         new_roles = await check_and_grant_level_roles(message.author, new_level)
-
-        target_channel = None
-        saved_channel_id = get_guild_level_channel_id(guild_id)
-        
-        if saved_channel_id:
-            target_channel = message.guild.get_channel(saved_channel_id)
-        
-        if target_channel is None:
-            for ch in message.guild.text_channels:
-                if "seviye" in ch.name.lower() or "level" in ch.name.lower():
-                    target_channel = ch
-                    break
-
-        if target_channel is None:
-            target_channel = message.channel
-
-        role_text = ""
-        if new_roles:
-            role_names = ", ".join([f"**{r.name}**" for r in new_roles])
-            role_text = f"\n🎖️ **Qazanılan Yeni Rol(lar):** {role_names}"
-
-        embed = discord.Embed(
-            title="🎉 SƏVİYYƏ ATLANDI!",
-            description=f"Təbrik edirik {message.author.mention}!\nSənin aktivliyin **Qafqaz Community** serverində yüksəlir!{role_text}",
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="Yeni Səviyyə", value=f"🏆 **Level {new_level}**", inline=True)
-        embed.add_field(name="Növbəti Hədəf", value=f"✨ `{xp_needed_for_level(new_level)} XP`", inline=True)
-        embed.set_thumbnail(url=message.author.display_avatar.url)
-        embed.set_footer(text="Qafqaz Community Bot • XP System")
-
-        try:
-            await target_channel.send(content=f"Hey {message.author.mention}!", embed=embed)
-        except Exception as e:
-            print(f"[ERROR] Level mesajı göndərilərkən xəta: {e}")
+        # Səviyyə atlama bildirişini göndəririk
+        await send_level_up_notice(message.author, new_level, new_roles, message.channel)
     else:
         update_user_data(user_id, guild_id, new_xp, level, current_time)
 
@@ -660,6 +667,7 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     needed_xp = xp_needed_for_level(level)
 
     leveled_up = False
+    old_level = level
     while new_xp >= needed_xp:
         new_xp -= needed_xp
         level += 1
@@ -671,6 +679,8 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     new_roles = []
     if leveled_up:
         new_roles = await check_and_grant_level_roles(member, level)
+        # Səviyyə atlama bildirişini XÜSUSİ KANALA (seviye-atlama) göndəririk!
+        await send_level_up_notice(member, level, new_roles, ctx.channel)
 
     msg = f"✅ **{member.display_name}** istifadəçisinə `{amount}` XP əlavə olundu!"
     if leveled_up:
