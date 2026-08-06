@@ -186,23 +186,21 @@ def add_giveaway(message_id: int, channel_id: int, guild_id: int, prize: str, wi
     conn.commit()
     conn.close()
 
-def toggle_giveaway_participant(message_id: int, user_id: int) -> bool:
-    """İstifadəçini çəkilişə əlavə edir və ya çıxarır."""
+def add_giveaway_participant(message_id: int, user_id: int) -> bool:
+    """İstifadəçini çəkilişə əlavə edir. Əgər artıq qatılıbsa False, yeni qatıldısa True qaytarır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT 1 FROM giveaway_participants WHERE message_id = ? AND user_id = ?", (message_id, user_id))
     exists = cursor.fetchone()
     
     if exists:
-        cursor.execute("DELETE FROM giveaway_participants WHERE message_id = ? AND user_id = ?", (message_id, user_id))
-        joined = False
+        conn.close()
+        return False
     else:
         cursor.execute("INSERT INTO giveaway_participants (message_id, user_id) VALUES (?, ?)", (message_id, user_id))
-        joined = True
-
-    conn.commit()
-    conn.close()
-    return joined
+        conn.commit()
+        conn.close()
+        return True
 
 def get_giveaway_participants(message_id: int):
     conn = sqlite3.connect(DB_NAME)
@@ -249,13 +247,13 @@ class GiveawayView(discord.ui.View):
         msg_id = self.message_id or interaction.message.id
         user_id = interaction.user.id
         
-        joined = toggle_giveaway_participant(msg_id, user_id)
+        added = add_giveaway_participant(msg_id, user_id)
         count = len(get_giveaway_participants(msg_id))
 
-        if joined:
+        if added:
             await interaction.response.send_message(f"🎉 **Təbrik edirik {interaction.user.mention}!** Çəkilişə uğurla qatıldınız! (Cəmi qatılan: {count})", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ **{interaction.user.mention}**, siz çəkilişdən çıxdınız. (Cəmi qatılan: {count})", ephemeral=True)
+            await interaction.response.send_message(f"⚠️ **{interaction.user.mention}**, siz artıq bu çəkilişə qatılmısınız!", ephemeral=True)
 
 # ==========================================
 # BOT HADİSƏLƏRİ VƏ BACKGROUND TASK
