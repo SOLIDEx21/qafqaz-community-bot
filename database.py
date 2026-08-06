@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import re
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -24,6 +25,15 @@ def format_query(sql: str) -> str:
     if is_postgres():
         return sql.replace("?", "%s")
     return sql
+
+def parse_duration(duration_str: str) -> int:
+    """10s, 5m, 2h, 1d kimi vaxt formatlarını saniyəyə çevirir."""
+    match = re.match(r"^(\d+)([smhd])$", duration_str.lower().strip())
+    if not match:
+        return 0
+    value, unit = int(match.group(1)), match.group(2)
+    unit_seconds = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
+    return value * unit_seconds.get(unit, 0)
 
 def init_db():
     """Məlumat bazasını və cədvəllərini buludda/lokalda yaradır."""

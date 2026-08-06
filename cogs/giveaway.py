@@ -102,11 +102,48 @@ class GiveawayCog(commands.Cog):
         )
         embed.set_footer(text="Qafqaz Community Giveaway System")
 
-        msg = await ctx.send(embed=embed)
-        view = GiveawayView(message_id=msg.id)
-        await msg.edit(view=view)
+        if ctx.interaction:
+            view = GiveawayView()
+            await ctx.interaction.response.send_message(embed=embed, view=view)
+            msg = await ctx.interaction.original_response()
+            view.message_id = msg.id
+        else:
+            msg = await ctx.send(embed=embed)
+            view = GiveawayView(message_id=msg.id)
+            await msg.edit(view=view)
 
         db.add_giveaway(msg.id, ctx.channel.id, ctx.guild.id, prize, winners, end_timestamp)
+
+    @commands.hybrid_command(name="greroll", description="[Admin] Bitmiş çəkilişdə yeni qalib seçin.")
+    @commands.has_permissions(manage_messages=True)
+    @app_commands.describe(message_id="Çəkiliş mesajının ID-si")
+    async def greroll(self, ctx: commands.Context, message_id: str):
+        try:
+            msg_id = int(message_id)
+        except ValueError:
+            await ctx.send("❌ Yanlış Mesaj ID-si!", ephemeral=True)
+            return
+
+        participants = db.get_giveaway_participants(msg_id)
+        if not participants:
+            await ctx.send("❌ Bu çəkilişə heç kim qatılmadığı üçün yeni qalib seçilə bilməz!", ephemeral=True)
+            return
+
+        new_winner_id = random.choice(participants)
+        await ctx.send(f"🎉 **YENİ QALİB SEÇİLDİ!**\n**Yeni Qalib:** <@{new_winner_id}> 🥳")
+
+    @commands.hybrid_command(name="gend", description="[Admin] Çəkilişi vaxtından əvvəl bitirin.")
+    @commands.has_permissions(manage_messages=True)
+    @app_commands.describe(message_id="Çəkiliş mesajının ID-si")
+    async def gend(self, ctx: commands.Context, message_id: str):
+        try:
+            msg_id = int(message_id)
+        except ValueError:
+            await ctx.send("❌ Yanlış Mesaj ID-si!", ephemeral=True)
+            return
+
+        db.mark_giveaway_ended(msg_id)
+        await ctx.send("✅ Çəkiliş uğurla vaxtından əvvəl bitirildi!")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(GiveawayCog(bot))
