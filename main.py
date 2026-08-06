@@ -13,6 +13,11 @@ from aiohttp import web
 # .env faylından mühit dəyişənlərini yükləyirik
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Render postgres:// formatını postgresql:// olaraq düzəldirik
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Bot üçün tələb olunan hüquqlar (Intents)
 intents = discord.Intents.default()
@@ -41,80 +46,117 @@ async def start_web_server():
     print(f"[INFO] Web server port {port}-de aktivlesdirildi (Render Free Ready)")
 
 # ==========================================
-# MƏLUMAT BAZASI (SQLite) İDARƏETMƏSİ
+# UNİVERSAL MƏLUMAT BAZASI (SQLite + PostgreSQL Cloud)
 # ==========================================
 DB_NAME = "qafqaz_community.db"
 
+def is_postgres():
+    return bool(DATABASE_URL)
+
+def get_db_connection():
+    if is_postgres():
+        import psycopg2
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        return sqlite3.connect(DB_NAME)
+
+def format_query(sql: str) -> str:
+    """PostgreSQL üçün '?' işarələrini '%s' ilə əvəzləyir."""
+    if is_postgres():
+        return sql.replace("?", "%s")
+    return sql
+
 def init_db():
-    """Məlumat bazasını və bütün cədvəlləri yaradır."""
-    conn = sqlite3.connect(DB_NAME)
+    """Məlumat bazasını və cədvəllərini buludda/lokalda yaradır."""
+    conn = get_db_connection()
     cursor = conn.cursor()
     
-    # XP və Level Cədvəli
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER,
-            guild_id INTEGER,
-            xp INTEGER DEFAULT 0,
-            level INTEGER DEFAULT 0,
-            last_msg INTEGER DEFAULT 0,
-            PRIMARY KEY (user_id, guild_id)
-        )
-    """)
-    
-    # Server Tənzimləmələri
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS guild_settings (
-            guild_id INTEGER PRIMARY KEY,
-            level_channel_id INTEGER
-        )
-    """)
-    
-    # Avtomatik Səviyyə Rolları Cədvəli
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS level_roles (
-            guild_id INTEGER,
-            level INTEGER,
-            role_id INTEGER,
-            PRIMARY KEY (guild_id, level)
-        )
-    """)
-    
-    # Çəkilişlər (Giveaway) Cədvəli
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS giveaways (
-            giveaway_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message_id INTEGER UNIQUE,
-            channel_id INTEGER,
-            guild_id INTEGER,
-            prize TEXT,
-            winner_count INTEGER,
-            end_timestamp INTEGER,
-            ended INTEGER DEFAULT 0
-        )
-    """)
-    
-    # Çəkilişə Qatılanlar Cədvəli
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS giveaway_participants (
-            message_id INTEGER,
-            user_id INTEGER,
-            PRIMARY KEY (message_id, user_id)
-        )
-    """)
+    if is_postgres():
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT,
+                guild_id BIGINT,
+                xp INT DEFAULT 0,
+                level INT DEFAULT 0,
+                last_msg BIGINT DEFAULT 0,
+                PRIMARY KEY (user_id, guild_id)
+            );
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id BIGINT PRIMARY KEY,
+                level_channel_id BIGINT
+            );
+            CREATE TABLE IF NOT EXISTS level_roles (
+                guild_id BIGINT,
+                level INT,
+                role_id BIGINT,
+                PRIMARY KEY (guild_id, level)
+            );
+            CREATE TABLE IF NOT EXISTS giveaways (
+                giveaway_id SERIAL PRIMARY KEY,
+                message_id BIGINT UNIQUE,
+                channel_id BIGINT,
+                guild_id BIGINT,
+                prize TEXT,
+                winner_count INT,
+                end_timestamp BIGINT,
+                ended INT DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS giveaway_participants (
+                message_id BIGINT,
+                user_id BIGINT,
+                PRIMARY KEY (message_id, user_id)
+            );
+        """)
+    else:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER,
+                guild_id INTEGER,
+                xp INTEGER DEFAULT 0,
+                level INTEGER DEFAULT 0,
+                last_msg INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, guild_id)
+            );
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id INTEGER PRIMARY KEY,
+                level_channel_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS level_roles (
+                guild_id INTEGER,
+                level INTEGER,
+                role_id INTEGER,
+                PRIMARY KEY (guild_id, level)
+            );
+            CREATE TABLE IF NOT EXISTS giveaways (
+                giveaway_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER UNIQUE,
+                channel_id INTEGER,
+                guild_id INTEGER,
+                prize TEXT,
+                winner_count INTEGER,
+                end_timestamp INTEGER,
+                ended INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS giveaway_participants (
+                message_id INTEGER,
+                user_id INTEGER,
+                PRIMARY KEY (message_id, user_id)
+            );
+        """)
 
     conn.commit()
     conn.close()
+    print(f"[DB INFO] Məlumat bazası uğurla qoşuldu ({'PostgreSQL Cloud' if is_postgres() else 'SQLite Local'})!")
 
 # --- XP Məntiqi ---
 def get_user_data(user_id: int, guild_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT xp, level, last_msg FROM users WHERE user_id = ? AND guild_id = ?", (user_id, guild_id))
+    cursor.execute(format_query("SELECT xp, level, last_msg FROM users WHERE user_id = ? AND guild_id = ?"), (user_id, guild_id))
     row = cursor.fetchone()
     
     if row is None:
-        cursor.execute("INSERT INTO users (user_id, guild_id, xp, level, last_msg) VALUES (?, ?, 0, 0, 0)", (user_id, guild_id))
+        cursor.execute(format_query("INSERT INTO users (user_id, guild_id, xp, level, last_msg) VALUES (?, ?, 0, 0, 0)"), (user_id, guild_id))
         conn.commit()
         xp, level, last_msg = 0, 0, 0
     else:
@@ -124,58 +166,58 @@ def get_user_data(user_id: int, guild_id: int):
     return xp, level, last_msg
 
 def update_user_data(user_id: int, guild_id: int, xp: int, level: int, last_msg: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(format_query("""
         UPDATE users 
         SET xp = ?, level = ?, last_msg = ?
         WHERE user_id = ? AND guild_id = ?
-    """, (xp, level, last_msg, user_id, guild_id))
+    """), (xp, level, last_msg, user_id, guild_id))
     conn.commit()
     conn.close()
 
 def set_guild_level_channel(guild_id: int, channel_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(format_query("""
         INSERT INTO guild_settings (guild_id, level_channel_id)
         VALUES (?, ?)
         ON CONFLICT(guild_id) DO UPDATE SET level_channel_id = excluded.level_channel_id
-    """, (guild_id, channel_id))
+    """), (guild_id, channel_id))
     conn.commit()
     conn.close()
 
 def get_guild_level_channel_id(guild_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT level_channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,))
+    cursor.execute(format_query("SELECT level_channel_id FROM guild_settings WHERE guild_id = ?"), (guild_id,))
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
 
 # --- Level Role DB funksiyaları ---
 def set_level_role(guild_id: int, level: int, role_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(format_query("""
         INSERT INTO level_roles (guild_id, level, role_id)
         VALUES (?, ?, ?)
         ON CONFLICT(guild_id, level) DO UPDATE SET role_id = excluded.role_id
-    """, (guild_id, level, role_id))
+    """), (guild_id, level, role_id))
     conn.commit()
     conn.close()
 
 def remove_level_role(guild_id: int, level: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM level_roles WHERE guild_id = ? AND level = ?", (guild_id, level))
+    cursor.execute(format_query("DELETE FROM level_roles WHERE guild_id = ? AND level = ?"), (guild_id, level))
     conn.commit()
     conn.close()
 
 def get_level_roles(guild_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT level, role_id FROM level_roles WHERE guild_id = ? ORDER BY level ASC", (guild_id,))
+    cursor.execute(format_query("SELECT level, role_id FROM level_roles WHERE guild_id = ? ORDER BY level ASC"), (guild_id,))
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -195,13 +237,13 @@ async def check_and_grant_level_roles(member: discord.Member, new_level: int) ->
     return granted_roles
 
 def get_user_rank(user_id: int, guild_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(format_query("""
         SELECT user_id FROM users 
         WHERE guild_id = ? 
         ORDER BY level DESC, xp DESC
-    """, (guild_id,))
+    """), (guild_id,))
     rows = cursor.fetchall()
     conn.close()
 
@@ -211,14 +253,14 @@ def get_user_rank(user_id: int, guild_id: int):
     return len(rows)
 
 def get_top_users(guild_id: int, limit: int = 10):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(format_query("""
         SELECT user_id, level, xp FROM users 
         WHERE guild_id = ? 
         ORDER BY level DESC, xp DESC 
         LIMIT ?
-    """, (guild_id, limit))
+    """), (guild_id, limit))
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -269,40 +311,40 @@ async def send_level_up_notice(member: discord.Member, new_level: int, new_roles
 
 # --- Giveaway DB funksiyaları ---
 def add_giveaway(message_id: int, channel_id: int, guild_id: int, prize: str, winner_count: int, end_timestamp: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(format_query("""
         INSERT INTO giveaways (message_id, channel_id, guild_id, prize, winner_count, end_timestamp, ended)
         VALUES (?, ?, ?, ?, ?, ?, 0)
-    """, (message_id, channel_id, guild_id, prize, winner_count, end_timestamp))
+    """), (message_id, channel_id, guild_id, prize, winner_count, end_timestamp))
     conn.commit()
     conn.close()
 
 def add_giveaway_participant(message_id: int, user_id: int) -> bool:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM giveaway_participants WHERE message_id = ? AND user_id = ?", (message_id, user_id))
+    cursor.execute(format_query("SELECT 1 FROM giveaway_participants WHERE message_id = ? AND user_id = ?"), (message_id, user_id))
     exists = cursor.fetchone()
     
     if exists:
         conn.close()
         return False
     else:
-        cursor.execute("INSERT INTO giveaway_participants (message_id, user_id) VALUES (?, ?)", (message_id, user_id))
+        cursor.execute(format_query("INSERT INTO giveaway_participants (message_id, user_id) VALUES (?, ?)"), (message_id, user_id))
         conn.commit()
         conn.close()
         return True
 
 def get_giveaway_participants(message_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM giveaway_participants WHERE message_id = ?", (message_id,))
+    cursor.execute(format_query("SELECT user_id FROM giveaway_participants WHERE message_id = ?"), (message_id,))
     rows = cursor.fetchall()
     conn.close()
     return [row[0] for row in rows]
 
 def get_active_giveaways():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT message_id, channel_id, guild_id, prize, winner_count, end_timestamp FROM giveaways WHERE ended = 0")
     rows = cursor.fetchall()
@@ -310,9 +352,9 @@ def get_active_giveaways():
     return rows
 
 def mark_giveaway_ended(message_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE giveaways SET ended = 1 WHERE message_id = ?", (message_id,))
+    cursor.execute(format_query("UPDATE giveaways SET ended = 1 WHERE message_id = ?"), (message_id,))
     conn.commit()
     conn.close()
 
@@ -445,9 +487,9 @@ async def giveaway_reroll_slash(interaction: discord.Interaction, message_id: st
         await interaction.response.send_message("❌ Yanlış Mesaj ID-si!", ephemeral=True)
         return
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT prize, winner_count FROM giveaways WHERE message_id = ?", (msg_id,))
+    cursor.execute(format_query("SELECT prize, winner_count FROM giveaways WHERE message_id = ?"), (msg_id,))
     row = cursor.fetchone()
     conn.close()
 
@@ -792,7 +834,7 @@ async def botinfo(ctx: commands.Context):
 # BOTU BAŞLATMAQ
 # ==========================================
 if __name__ == "__main__":
-    if not TOKEN or TOKEN == "BURAYA_DISCORD_BOT_TOKENINIZI_YAZIN":
+    if not TOKEN or TOKEN == "BURAYA_DISCORD_TOKENINIZI_YAZIN":
         print("❌ XƏTA: .env faylına düzgün DISCORD_TOKEN daxil edin!")
     else:
         bot.run(TOKEN)
