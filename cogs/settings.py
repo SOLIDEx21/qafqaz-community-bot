@@ -5,21 +5,22 @@ from discord import app_commands
 import database as db
 
 # ==========================================
-# MASTER CONTROL PANEL (ÜMUMİ İDARƏETMƏ PANENLİ)
+# MASTER CONTROL PANEL (DİNAMİK VƏ İNTERAKTİV)
 # ==========================================
 
 class MasterCategorySelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Log Sistemi Tənzimləmələri", value="logs", description="Server log kanallarını ayarlayın", emoji="📜"),
-            discord.SelectOption(label="XP və Level Sistemi", value="level", description="Səviyyə bildiriş kanalı və səviyyə rolları", emoji="🏆"),
-            discord.SelectOption(label="Çəkiliş Sistemi Statusu", value="giveaway", description="Aktiv çəkilişlər və məlumatlar", emoji="🎉"),
-            discord.SelectOption(label="Server və Bot Haqqında", value="info", description="Bot statusu, server statistikası və kömək", emoji="ℹ️")
+            discord.SelectOption(label="📜 Log Sistemi Tənzimləmələri", value="logs", description="Server log kanallarını 1 kliklə seçin"),
+            discord.SelectOption(label="🏆 XP və Level Sistemi", value="level", description="Səviyyə atlama kanalı və tənzimləmələri"),
+            discord.SelectOption(label="🎉 Çəkiliş Sistemi Statusu", value="giveaway", description="Aktiv çəkilişlər haqqında məlumat"),
+            discord.SelectOption(label="ℹ️ Server və Bot Haqqında", value="info", description="Bot statusu və server statistikası")
         ]
         super().__init__(placeholder="🛠️ Tənzimləmək istədiyiniz Bölməni Seçin...", min_values=1, max_values=1, options=options, row=0)
 
     async def callback(self, interaction: discord.Interaction):
         self.view.current_category = self.values[0]
+        self.view.update_components_for_category()
         embed = self.view.get_embed_for_category(interaction.guild, self.values[0])
         await interaction.response.edit_message(embed=embed, view=self.view)
 
@@ -37,7 +38,7 @@ class LevelChannelSelect(discord.ui.ChannelSelect):
 class LogTypeSelectMenu(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="mesaj-log", description="Mesaj silinmələri/redaktələri", emoji="💬"),
+            discord.SelectOption(label="mesaj-log", description="Mesaj silinmələri və redaktələri", emoji="💬"),
             discord.SelectOption(label="giriş-çıkış-log", description="Serverə giriş və çıxışlar", emoji="📥"),
             discord.SelectOption(label="rol-log", description="Rol dəyişiklikləri", emoji="🎭"),
             discord.SelectOption(label="isim-log", description="Nikneym dəyişiklikləri", emoji="🏷️"),
@@ -51,7 +52,7 @@ class LogTypeSelectMenu(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         self.view.selected_log_type = self.values[0]
         await interaction.response.send_message(
-            f"📌 **Seçilmiş Log Növü:** `{self.values[0]}`\nİndi aşağıdakı menyudan kanalı seçin və ya **🔴 Deaktiv Et** düyməsinə basıb ləğv edin.",
+            f"📌 **Seçilmiş Log Növü:** `{self.values[0]}`\nİndi kanalı seçin və ya **🔴 Deaktiv Et** düyməsinə klikləyin.",
             ephemeral=True
         )
 
@@ -67,16 +68,34 @@ class LogChannelSelectMenu(discord.ui.ChannelSelect):
         await interaction.response.edit_message(embed=embed, view=self.view)
         await interaction.followup.send(f"✅ **{selected_log}** üçün {channel.mention} kanalı təyin olundu!", ephemeral=True)
 
+class DisableLogButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="🔴 Logu Deaktiv Et", style=discord.ButtonStyle.danger, row=3)
+
+    async def callback(self, interaction: discord.Interaction):
+        log_type = getattr(self.view, 'selected_log_type', 'mesaj-log')
+        db.remove_log_channel(interaction.guild_id, log_type)
+        embed = self.view.get_embed_for_category(interaction.guild, "logs")
+        await interaction.response.edit_message(embed=embed, view=self.view)
+        await interaction.followup.send(f"🔴 **{log_type}** ləğv edildi (Deaktif).", ephemeral=True)
+
+class RefreshPanelButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="🔄 Paneli Yenilə", style=discord.ButtonStyle.secondary, row=3)
+
+    async def callback(self, interaction: discord.Interaction):
+        embed = self.view.get_embed_for_category(interaction.guild, self.view.current_category)
+        await interaction.response.edit_message(embed=embed, view=self.view)
+        await interaction.followup.send("🔄 Panel yeniləndi!", ephemeral=True)
+
 class MasterSettingsView(discord.ui.View):
     def __init__(self, author_id: int):
         super().__init__(timeout=300)
         self.author_id = author_id
-        self.current_category = "logs"
+        self.current_category = "menu"
         self.selected_log_type = "mesaj-log"
 
-        self.add_item(MasterCategorySelect())
-        self.add_item(LogTypeSelectMenu())
-        self.add_item(LogChannelSelectMenu())
+        self.update_components_for_category()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
@@ -84,24 +103,37 @@ class MasterSettingsView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="🔴 Logu Deaktiv Et", style=discord.ButtonStyle.danger, row=3)
-    async def disable_log(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log_type = getattr(self, 'selected_log_type', 'mesaj-log')
-        db.remove_log_channel(interaction.guild_id, log_type)
-        embed = self.get_embed_for_category(interaction.guild, "logs")
-        await interaction.response.edit_message(embed=embed, view=self)
-        await interaction.followup.send(f"🔴 **{log_type}** ləğv edildi.", ephemeral=True)
+    def update_components_for_category(self):
+        self.clear_items()
+        self.add_item(MasterCategorySelect())
 
-    @discord.ui.button(label="🔄 Paneli Yenilə", style=discord.ButtonStyle.secondary, row=3)
-    async def refresh_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = self.get_embed_for_category(interaction.guild, self.current_category)
-        await interaction.response.edit_message(embed=embed, view=self)
-        await interaction.followup.send("🔄 Panel yeniləndi!", ephemeral=True)
+        if self.current_category == "logs":
+            self.add_item(LogTypeSelectMenu())
+            self.add_item(LogChannelSelectMenu())
+            self.add_item(DisableLogButton())
+            self.add_item(RefreshPanelButton())
+        elif self.current_category == "level":
+            self.add_item(LevelChannelSelect())
+            self.add_item(RefreshPanelButton())
+        elif self.current_category in ["giveaway", "info"]:
+            self.add_item(RefreshPanelButton())
 
     def get_embed_for_category(self, guild: discord.Guild, category: str) -> discord.Embed:
         now_str = datetime.datetime.now().strftime("%d.%m.%Y – %H:%M:%S")
 
-        if category == "logs":
+        if category == "menu":
+            embed = discord.Embed(
+                title="⚙️ QAFQAZ GAMING COMMUNITY - Ümumi İdarəetmə Paneli",
+                description="Xoş gəldiniz! Aşağıdakı menyudan idarə etmək istədiyiniz bölməni seçin.",
+                color=discord.Color.blurple()
+            )
+            embed.add_field(name="📜 Log Sistemi", value="Serverdəki bütün audit log kanallarını ayarlayın", inline=True)
+            embed.add_field(name="🏆 XP & Level", value="Səviyyə atlama kanalı və rol mükafatları", inline=True)
+            embed.add_field(name="🎉 Çəkilişlər", value="Aktiv çəkiliş statusu və idarəetmə", inline=True)
+            embed.set_footer(text=f"Qafqaz Community Bot • {now_str}")
+            return embed
+
+        elif category == "logs":
             log_channels = db.get_log_channels(guild.id)
             def status(lt):
                 cid = log_channels.get(lt)
@@ -121,7 +153,7 @@ class MasterSettingsView(discord.ui.View):
             embed.add_field(name="#️⃣ Kanal Log:", value=status("kanal-log"), inline=True)
             embed.add_field(name="⛔ Ban Log:", value=status("ban-log"), inline=True)
             embed.add_field(name="🛠️ Mod Log:", value=status("mod-log"), inline=True)
-            embed.set_footer(text=f"Aşağıdakı menyulardan 1 kliklə kanalları dəyişin | {now_str}")
+            embed.set_footer(text=f"Aşağıda açılan menyulardan kanalları seçin | {now_str}")
             return embed
 
         elif category == "level":
@@ -170,7 +202,7 @@ class SettingsCog(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def master_settings(self, ctx: commands.Context):
         view = MasterSettingsView(author_id=ctx.author.id)
-        embed = view.get_embed_for_category(ctx.guild, "logs")
+        embed = view.get_embed_for_category(ctx.guild, "menu")
         await ctx.send(embed=embed, view=view)
 
 async def setup(bot: commands.Bot):
