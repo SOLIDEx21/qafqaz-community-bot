@@ -263,7 +263,7 @@ async def send_level_up_notice(member: discord.Member, new_level: int, new_roles
     embed.set_footer(text="Qafqaz Community Bot • XP System")
 
     try:
-        await target_channel.send(content=f"Hey {member.mention}!", embed=embed)
+        await target_channel.send(embed=embed)
     except Exception as e:
         print(f"[ERROR] Level mesajı göndərilərkən xəta: {e}")
 
@@ -705,11 +705,8 @@ async def clear_messages(ctx: commands.Context, amount: int):
         return
 
     try:
-        # Mesajları silirik
         deleted = await ctx.channel.purge(limit=amount)
         deleted_count = len(deleted)
-        
-        # 5 saniyə sonra avtomatik silinən bildiriş mesajı
         await ctx.send(f"🧹 **{deleted_count}** ədəd mesaj uğurla silindi!", delete_after=5)
     except Exception as e:
         await ctx.send(f"❌ Mesajlar silinərkən xəta yarandı: {e}", ephemeral=True)
