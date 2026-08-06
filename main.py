@@ -7,6 +7,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
+from aiohttp import web
 
 # .env faylından mühit dəyişənlərini yükləyirik
 load_dotenv()
@@ -19,6 +20,24 @@ intents.members = True
 
 # Bot obyekti
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=commands.DefaultHelpCommand())
+
+# ==========================================
+# WEBSERVER (Render.com Free Web Service üçün)
+# ==========================================
+async def handle_ping(request):
+    return web.Response(text="Qafqaz Community Bot 7/24 Aktivdir!")
+
+async def start_web_server():
+    """Render.com-da Web Service-in pulsuz çalışması üçün kiçik HTTP server."""
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    app.router.add_get('/health', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 Web server port {port}-də aktivləşdirildi (Render Free Ready)")
 
 # ==========================================
 # MƏLUMAT BAZASI (SQLite) İDARƏETMƏSİ
@@ -113,6 +132,9 @@ def xp_needed_for_level(level: int) -> int:
 @bot.event
 async def on_ready():
     init_db()
+    # Web serveri arxa fonda başladırıq (Render Free Tier üçün)
+    asyncio.create_task(start_web_server())
+
     try:
         synced = await bot.tree.sync()
         print(f"✅ Qafqaz Community Bot aktivdir! {len(synced)} ədəd slash (/) əmri sinxronlaşdırıldı.")
@@ -237,7 +259,7 @@ async def botinfo(ctx: commands.Context):
     )
     embed.add_field(name="📌 Əmrlər", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10 sıralaması\n`/botinfo` - Bot haqqında məlumat", inline=False)
     embed.add_field(name="💡 XP Təlimatı", value="Kanallarda hər yazdığınız mesaja görə (60s cooldown ilə) 15-25 XP qazanırsınız.", inline=False)
-    embed.set_footer(text="Qafqaz Community Bot • Discloud 7/24 Hosting Ready")
+    embed.set_footer(text="Qafqaz Community Bot • Render 7/24 Hosting Ready")
 
     await ctx.send(embed=embed)
 
