@@ -458,12 +458,21 @@ async def on_ready():
     if not check_giveaways.is_running():
         check_giveaways.start()
 
+    # ANINDA (INSTANT) SLASH COMMAND SYNC: Hər bir server üçün slash əmrləri anında sinxronlaşdırılır
     try:
-        synced = await bot.tree.sync()
-        print(f"[SUCCESS] Qafqaz Community Bot aktivdir! {len(synced)} eded slash (/) emri sinxronlasdirildi.")
+        global_synced = await bot.tree.sync()
+        print(f"[GLOBAL SYNC] {len(global_synced)} qlobal slash əmri sinxronlaşdırıldı.")
     except Exception as e:
-        print(f"[ERROR] Slash emrleri sinxronlasdirilarken xeta yarandi: {e}")
-    
+        print(f"[GLOBAL SYNC ERROR] {e}")
+
+    for guild in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"[INSTANT SYNC] '{guild.name}' serveri üçün {len(synced)} slash əmri anında yeniləndi!")
+        except Exception as e:
+            print(f"[INSTANT SYNC ERROR] '{guild.name}' xətası: {e}")
+
     print(f"[INFO] Bot adi: {bot.user.name} | ID: {bot.user.id}")
     print("[INFO] Qafqaz Community Discord serveri ucun 7/24 hazir veziyyetdedir!")
 
