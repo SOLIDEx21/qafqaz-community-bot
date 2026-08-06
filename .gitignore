@@ -4,4 +4,4 @@ target/
 build/
 .gradle/
 *.class
-*.png
+!assets/*.png
