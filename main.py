@@ -57,20 +57,19 @@ async def on_ready():
     db.init_db()
     asyncio.create_task(start_web_server())
 
-    # ANINDA (INSTANT) SLASH COMMAND SYNC
-    try:
-        global_synced = await bot.tree.sync()
-        print(f"[GLOBAL SYNC] {len(global_synced)} qlobal slash əmri sinxronlaşdırıldı.")
-    except Exception as e:
-        print(f"[GLOBAL SYNC ERROR] {e}")
-
+    # TƏKRARLANMANIN QARŞISINI ALMAQ ÜÇÜN GUILD COMMANDS TƏMİZLƏNİR VƏ ANCAQ GLOBAL SYNC OLUNUR
     for guild in bot.guilds:
         try:
-            bot.tree.copy_global_to(guild=guild)
-            synced = await bot.tree.sync(guild=guild)
-            print(f"[INSTANT SYNC] '{guild.name}' serveri üçün {len(synced)} slash əmri anında yeniləndi!")
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
         except Exception as e:
-            print(f"[INSTANT SYNC ERROR] '{guild.name}' xətası: {e}")
+            print(f"[SYNC CLEANUP ERROR] {e}")
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"[SYNC SUCCESS] {len(synced)} qlobal slash əmri tək nüsxədə sinxronlaşdırıldı.")
+    except Exception as e:
+        print(f"[SYNC ERROR] {e}")
 
     print(f"[INFO] Bot adi: {bot.user.name} | ID: {bot.user.id}")
     print("[INFO] Qafqaz Community Discord serveri ucun 7/24 hazir veziyyetdedir!")
