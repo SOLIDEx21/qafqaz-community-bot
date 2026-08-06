@@ -37,7 +37,7 @@ async def start_web_server():
     port = int(os.getenv("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"🌐 Web server port {port}-də aktivləşdirildi (Render Free Ready)")
+    print(f"[INFO] Web server port {port}-de aktivlesdirildi (Render Free Ready)")
 
 # ==========================================
 # MƏLUMAT BAZASI (SQLite) İDARƏETMƏSİ
@@ -137,12 +137,12 @@ async def on_ready():
 
     try:
         synced = await bot.tree.sync()
-        print(f"✅ Qafqaz Community Bot aktivdir! {len(synced)} ədəd slash (/) əmri sinxronlaşdırıldı.")
+        print(f"[SUCCESS] Qafqaz Community Bot aktivdir! {len(synced)} eded slash (/) emri sinxronlasdirildi.")
     except Exception as e:
-        print(f"❌ Slash əmrləri sinxronlaşdırılarkən xəta yarandı: {e}")
+        print(f"[ERROR] Slash emrleri sinxronlasdirilarken xeta yarandi: {e}")
     
-    print(f"🤖 Bot adı: {bot.user.name} | ID: {bot.user.id}")
-    print("🌐 Qafqaz Community Discord serveri üçün 7/24 hazır vəziyyətdədir!")
+    print(f"[INFO] Bot adi: {bot.user.name} | ID: {bot.user.id}")
+    print("[INFO] Qafqaz Community Discord serveri ucun 7/24 hazir veziyyetdedir!")
 
 @bot.event
 async def on_message(message: discord.Message):
