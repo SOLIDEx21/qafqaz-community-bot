@@ -695,29 +695,48 @@ async def addxp_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ Bu əmri istifadə etmək üçün Administrator hüququnuz olmalıdır!", ephemeral=True)
 
-# --- ADMİN: MESAJ SİL / CLEAR / PURGE (/clear) ---
+# --- ADMİN: MESAJ SİL / CLEAR / PURGE (/clear və ya !clear) ---
 @bot.hybrid_command(name="clear", aliases=["purge", "sil"], description="[Admin] Kanaldakı mesajları toplu şəkildə silin (Maksimum 100).")
 @commands.has_permissions(manage_messages=True)
 @app_commands.describe(amount="Silinəcək mesaj sayı (1-100)")
 async def clear_messages(ctx: commands.Context, amount: int):
     if amount <= 0 or amount > 100:
-        await ctx.send("❌ Silinəcək mesaj sayı 1 ilə 100 arasında olmalıdır!", ephemeral=True)
+        if ctx.interaction:
+            await ctx.interaction.response.send_message("❌ Silinəcək mesaj sayı 1 ilə 100 arasında olmalıdır!", ephemeral=True)
+        else:
+            await ctx.send("❌ Silinəcək mesaj sayı 1 ilə 100 arasında olmalıdır!")
         return
 
-    # Defer interaction immediately so Discord 3-second timeout NEVER happens!
-    await ctx.defer(ephemeral=True)
-
-    try:
-        deleted = await ctx.channel.purge(limit=amount)
-        deleted_count = len(deleted)
-        await ctx.send(f"🧹 **{deleted_count}** ədəd mesaj uğurla silindi!", delete_after=5)
-    except Exception as e:
-        await ctx.send(f"❌ Mesajlar silinərkən xəta yarandı: {e}", ephemeral=True)
+    if ctx.interaction:
+        await ctx.interaction.response.defer(ephemeral=True)
+        try:
+            deleted = await ctx.channel.purge(limit=amount)
+            deleted_count = len(deleted)
+            await ctx.interaction.followup.send(f"🧹 **{deleted_count}** ədəd mesaj uğurla silindi!", ephemeral=True)
+        except discord.Forbidden:
+            await ctx.interaction.followup.send("❌ Xəta: Botun bu kanalda **Mesajları İdarə Et (Manage Messages)** hüququ yoxdur!", ephemeral=True)
+        except Exception as e:
+            await ctx.interaction.followup.send(f"❌ Mesajlar silinərkən xəta yarandı: {e}", ephemeral=True)
+    else:
+        try:
+            await ctx.message.delete()
+            deleted = await ctx.channel.purge(limit=amount)
+            deleted_count = len(deleted)
+            msg = await ctx.send(f"🧹 **{deleted_count}** ədəd mesaj uğurla silindi!")
+            await asyncio.sleep(4)
+            await msg.delete()
+        except discord.Forbidden:
+            await ctx.send("❌ Xəta: Botun bu kanalda **Mesajları İdarə Et (Manage Messages)** hüququ yoxdur!")
+        except Exception as e:
+            await ctx.send(f"❌ Mesajlar silinərkən xəta yarandı: {e}")
 
 @clear_messages.error
 async def clear_messages_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Bu əmri istifadə etmək üçün Mesajları İdarə Et hüququnuz olmalıdır!", ephemeral=True)
+        if ctx.interaction:
+            await ctx.interaction.response.send_message("❌ Bu əmri istifadə etmək üçün Mesajları İdarə Et hüququnuz olmalıdır!", ephemeral=True)
+        else:
+            await ctx.send("❌ Bu əmri istifadə etmək üçün Mesajları İdarə Et hüququnuz olmalıdır!")
 
 # Alternativ Prefiks/Hybrid Çəkiliş Əmrləri
 @bot.hybrid_command(name="gstart", description="[Admin] Yeni çəkiliş başladın.")
