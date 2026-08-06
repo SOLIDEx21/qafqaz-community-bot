@@ -5,6 +5,9 @@ from discord.ext import commands
 from discord import app_commands
 import database as db
 
+LOGO_URL = "https://raw.githubusercontent.com/SOLIDEx21/qafqaz-community-bot/main/assets/logo.png"
+BANNER_URL = "https://raw.githubusercontent.com/SOLIDEx21/qafqaz-community-bot/main/assets/banner.png"
+
 # ==========================================
 # INTERACTIVE TICKET FORM MODAL & SELECT MENU
 # ==========================================
@@ -187,7 +190,7 @@ class TicketCog(commands.Cog):
         self.bot.add_view(TicketSetupView())
         self.bot.add_view(TicketActionView())
 
-    @commands.hybrid_command(name="ticketsetup", description="[Admin] Formlu Dəstək Bilet Paneli Mesajını göndərir.")
+    @commands.hybrid_command(name="ticketsetup", description="[Admin] Şəkilli Və Bannerli Formlu Dəstək Bilet Paneli Mesajını göndərir.")
     @commands.has_permissions(administrator=True)
     async def ticket_setup(self, ctx: commands.Context):
         embed = discord.Embed(
@@ -199,8 +202,9 @@ class TicketCog(commands.Cog):
                         "💎 **VİP & Sponsorluq** — Əməkdaşlıq müraciəti",
             color=discord.Color.blurple()
         )
-        embed.set_thumbnail(url="https://i.imgur.com/b4z0S8u.png")
-        embed.set_footer(text="Qafqaz Community Interactive Ticket System")
+        embed.set_thumbnail(url=LOGO_URL)
+        embed.set_image(url=BANNER_URL)
+        embed.set_footer(text="Qafqaz Community Interactive Ticket System • 7/24 Dəstək")
 
         view = TicketSetupView()
         await ctx.send(embed=embed, view=view)
