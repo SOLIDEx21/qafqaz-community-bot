@@ -46,7 +46,7 @@ async def start_web_server():
 DB_NAME = "qafqaz_community.db"
 
 def init_db():
-    """Məlumat bazasını, istifadəçi, tənzimləmə və çəkiliş cədvəllərini yaradır."""
+    """Məlumat bazasını və bütün cədvəlləri yaradır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
@@ -67,6 +67,16 @@ def init_db():
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id INTEGER PRIMARY KEY,
             level_channel_id INTEGER
+        )
+    """)
+    
+    # Avtomatik Səviyyə Rolları Cədvəli
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS level_roles (
+            guild_id INTEGER,
+            level INTEGER,
+            role_id INTEGER,
+            PRIMARY KEY (guild_id, level)
         )
     """)
     
@@ -143,6 +153,48 @@ def get_guild_level_channel_id(guild_id: int):
     conn.close()
     return row[0] if row else None
 
+# --- Level Role DB funksiyaları ---
+def set_level_role(guild_id: int, level: int, role_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO level_roles (guild_id, level, role_id)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id, level) DO UPDATE SET role_id = excluded.role_id
+    """, (guild_id, level, role_id))
+    conn.commit()
+    conn.close()
+
+def remove_level_role(guild_id: int, level: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM level_roles WHERE guild_id = ? AND level = ?", (guild_id, level))
+    conn.commit()
+    conn.close()
+
+def get_level_roles(guild_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT level, role_id FROM level_roles WHERE guild_id = ? ORDER BY level ASC", (guild_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+async def check_and_grant_level_roles(member: discord.Member, new_level: int) -> list:
+    """İstifadəçinin qazandığı yeni səviyyə rollarını avtomatik olaraq ona verir."""
+    granted_roles = []
+    level_roles = get_level_roles(member.guild.id)
+    for lvl, role_id in level_roles:
+        if new_level >= lvl:
+            role = member.guild.get_role(role_id)
+            if role and role not in member.roles:
+                try:
+                    await member.add_roles(role)
+                    granted_roles.append(role)
+                except Exception as e:
+                    print(f"[ERROR] Rol verilərkən xəta: {e}")
+    return granted_roles
+
 def get_user_rank(user_id: int, guild_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -187,7 +239,6 @@ def add_giveaway(message_id: int, channel_id: int, guild_id: int, prize: str, wi
     conn.close()
 
 def add_giveaway_participant(message_id: int, user_id: int) -> bool:
-    """İstifadəçini çəkilişə əlavə edir. Əgər artıq qatılıbsa False, yeni qatıldısa True qaytarır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT 1 FROM giveaway_participants WHERE message_id = ? AND user_id = ?", (message_id, user_id))
@@ -226,7 +277,6 @@ def mark_giveaway_ended(message_id: int):
     conn.close()
 
 def parse_duration(duration_str: str) -> int:
-    """Məsələn '10s', '5m', '2h', '1d' daxil etdikdə saniyəyə çevirir."""
     match = re.match(r"^(\d+)([smhd])$", duration_str.lower().strip())
     if not match:
         return 0
@@ -260,7 +310,6 @@ class GiveawayView(discord.ui.View):
 # ==========================================
 @tasks.loop(seconds=10)
 async def check_giveaways():
-    """Hər 10 saniyədən bir vaxtı bitən çəkilişləri yoxlayır və qalibləri elan edir."""
     active_giveaways = get_active_giveaways()
     now = int(time.time())
 
@@ -403,13 +452,9 @@ bot.tree.add_command(giveaway_group)
 @bot.event
 async def on_ready():
     init_db()
-    # Web serveri arxa fonda başladırıq (Render Free Tier üçün)
     asyncio.create_task(start_web_server())
-    
-    # Persistent view register
     bot.add_view(GiveawayView())
     
-    # Çəkiliş taymerini başladırıq
     if not check_giveaways.is_running():
         check_giveaways.start()
 
@@ -443,6 +488,9 @@ async def on_message(message: discord.Message):
         new_level = level + 1
         update_user_data(user_id, guild_id, new_xp, new_level, current_time)
 
+        # Level rolunu avtomatik veririk
+        new_roles = await check_and_grant_level_roles(message.author, new_level)
+
         target_channel = None
         saved_channel_id = get_guild_level_channel_id(guild_id)
         
@@ -458,9 +506,14 @@ async def on_message(message: discord.Message):
         if target_channel is None:
             target_channel = message.channel
 
+        role_text = ""
+        if new_roles:
+            role_names = ", ".join([f"**{r.name}**" for r in new_roles])
+            role_text = f"\n🎖️ **Qazanılan Yeni Rol(lar):** {role_names}"
+
         embed = discord.Embed(
             title="🎉 SƏVİYYƏ ATLANDI!",
-            description=f"Təbrik edirik {message.author.mention}!\nSənin aktivliyin **Qafqaz Community** serverində yüksəlir!",
+            description=f"Təbrik edirik {message.author.mention}!\nSənin aktivliyin **Qafqaz Community** serverində yüksəlir!{role_text}",
             color=discord.Color.gold()
         )
         embed.add_field(name="Yeni Səviyyə", value=f"🏆 **Level {new_level}**", inline=True)
@@ -545,6 +598,85 @@ async def setlevelchannel(ctx: commands.Context, channel: discord.TextChannel):
     set_guild_level_channel(ctx.guild.id, channel.id)
     await ctx.send(f"✅ Səviyyə atlama bildirişləri artıq {channel.mention} kanalına göndəriləcək!")
 
+# --- LEVEL ROLE ADMİN ƏMRLƏRİ ---
+@bot.hybrid_command(name="addlevelrole", description="[Admin] Müəyyən səviyyə üçün avtomatik rol mükafatı təyin edin.")
+@commands.has_permissions(administrator=True)
+@app_commands.describe(level="Tələb olunan Level (məs: 5)", role="Veriləcək rol")
+async def addlevelrole(ctx: commands.Context, level: int, role: discord.Role):
+    if level <= 0:
+        await ctx.send("❌ Level müsbət ədəd olmalıdır!", ephemeral=True)
+        return
+
+    set_level_role(ctx.guild.id, level, role.id)
+    await ctx.send(f"✅ **Level {level}** üçün avtomatik rol mükafatı təyin olundu: {role.mention}")
+
+@bot.hybrid_command(name="removelevelrole", description="[Admin] Səviyyə rol mükafatını silin.")
+@commands.has_permissions(administrator=True)
+@app_commands.describe(level="Silinəcək Level (məs: 5)")
+async def removelevelrole(ctx: commands.Context, level: int):
+    remove_level_role(ctx.guild.id, level)
+    await ctx.send(f"✅ **Level {level}** rol mükafatı ləğv edildi!")
+
+@bot.hybrid_command(name="levelroles", description="Serverdə təyin olunmuş bütün səviyyə rollarını göstərir.")
+async def levelroles(ctx: commands.Context):
+    roles_data = get_level_roles(ctx.guild.id)
+    if not roles_data:
+        await ctx.send("📜 Hələ ki heç bir səviyyə rolu təyin olunmayıb!")
+        return
+
+    embed = discord.Embed(
+        title="🎖️ Qafqaz Community - Səviyyə Rol Mükafatları",
+        color=discord.Color.gold()
+    )
+    lines = []
+    for lvl, role_id in roles_data:
+        role = ctx.guild.get_role(role_id)
+        role_mention = role.mention if role else f"Silinmiş Rol ({role_id})"
+        lines.append(f"🏆 **Level {lvl}** $\rightarrow$ {role_mention}")
+
+    embed.description = "\n".join(lines)
+    await ctx.send(embed=embed)
+
+# --- ADMİN: XP ƏLAVƏ ET (/addxp) ---
+@bot.hybrid_command(name="addxp", description="[Admin] İstifadəçiyə xüsusi XP əlavə et.")
+@commands.has_permissions(administrator=True)
+@app_commands.describe(member="XP verilməli olan istifadəçi", amount="Əlavə ediləcək XP miqdarı")
+async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
+    if amount <= 0:
+        await ctx.send("❌ Miqdar müsbət ədəd olmalıdır!", ephemeral=True)
+        return
+
+    xp, level, last_msg = get_user_data(member.id, ctx.guild.id)
+    new_xp = xp + amount
+    needed_xp = xp_needed_for_level(level)
+
+    leveled_up = False
+    while new_xp >= needed_xp:
+        new_xp -= needed_xp
+        level += 1
+        needed_xp = xp_needed_for_level(level)
+        leveled_up = True
+
+    update_user_data(member.id, ctx.guild.id, new_xp, level, last_msg)
+
+    new_roles = []
+    if leveled_up:
+        new_roles = await check_and_grant_level_roles(member, level)
+
+    msg = f"✅ **{member.display_name}** istifadəçisinə `{amount}` XP əlavə olundu!"
+    if leveled_up:
+        msg += f" Yeni Səviyyəsi: **Level {level}** 🚀"
+        if new_roles:
+            role_names = ", ".join([r.name for r in new_roles])
+            msg += f" (Qazanılan Rol: **{role_names}**)"
+
+    await ctx.send(msg)
+
+@addxp.error
+async def addxp_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Bu əmri istifadə etmək üçün Administrator hüququnuz olmalıdır!", ephemeral=True)
+
 # Alternativ Prefiks/Hybrid Çəkiliş Əmrləri
 @bot.hybrid_command(name="gstart", description="[Admin] Yeni çəkiliş başladın.")
 @commands.has_permissions(manage_messages=True)
@@ -585,10 +717,10 @@ async def gstart(ctx: commands.Context, duration: str, winners: int, prize: str)
 async def botinfo(ctx: commands.Context):
     embed = discord.Embed(
         title="🇦🇿 Qafqaz Community Bot",
-        description="Qafqaz Community serveri üçün xüsusi hazırlanmış XP, Level və Çəkiliş botu.",
+        description="Qafqaz Community serveri üçün xüsusi hazırlanmış XP, Level, Rol və Çəkiliş botu.",
         color=discord.Color.green()
     )
-    embed.add_field(name="📌 XP Əmrləri", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10 sıralaması\n`/setlevelchannel` - Level kanalı seçin", inline=False)
+    embed.add_field(name="📌 XP & Rol Əmrləri", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10\n`/levelroles` - Rol mükafatları\n`/addxp <user> <amount>` - [Admin] XP ver\n`/addlevelrole <level> <role>` - [Admin] Rol təyin et", inline=False)
     embed.add_field(name="🎉 Çəkiliş Əmrləri", value="`/giveaway start <vaxt> <qalib_sayı> <mükafat>`\n`/gstart <vaxt> <qalib_sayı> <mükafat>`", inline=False)
     embed.set_footer(text="Qafqaz Community Bot • Render 7/24 Hosting Ready")
 
