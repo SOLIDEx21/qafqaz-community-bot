@@ -181,7 +181,6 @@ def get_level_roles(guild_id: int):
     return rows
 
 async def check_and_grant_level_roles(member: discord.Member, new_level: int) -> list:
-    """İstifadəçinin qazandığı yeni səviyyə rollarını avtomatik olaraq ona verir."""
     granted_roles = []
     level_roles = get_level_roles(member.guild.id)
     for lvl, role_id in level_roles:
@@ -458,7 +457,7 @@ async def on_ready():
     if not check_giveaways.is_running():
         check_giveaways.start()
 
-    # ANINDA (INSTANT) SLASH COMMAND SYNC: Hər bir server üçün slash əmrləri anında sinxronlaşdırılır
+    # ANINDA (INSTANT) SLASH COMMAND SYNC
     try:
         global_synced = await bot.tree.sync()
         print(f"[GLOBAL SYNC] {len(global_synced)} qlobal slash əmri sinxronlaşdırıldı.")
@@ -602,10 +601,11 @@ async def leaderboard(ctx: commands.Context):
 
 @bot.hybrid_command(name="setlevelchannel", description="[Admin] Səviyyə atlama bildirişlərinin göndəriləcəyi kanalı seçin.")
 @commands.has_permissions(administrator=True)
-@app_commands.describe(channel="Level atlama bildirişlərinin düşəcəyi kanal")
-async def setlevelchannel(ctx: commands.Context, channel: discord.TextChannel):
-    set_guild_level_channel(ctx.guild.id, channel.id)
-    await ctx.send(f"✅ Səviyyə atlama bildirişləri artıq {channel.mention} kanalına göndəriləcək!")
+@app_commands.describe(channel="Kanal (seçməsəniz, əmrin yazıldığı kanal avtomatik təyin olunur)")
+async def setlevelchannel(ctx: commands.Context, channel: discord.TextChannel = None):
+    target = channel or ctx.channel
+    set_guild_level_channel(ctx.guild.id, target.id)
+    await ctx.send(f"✅ Səviyyə atlama bildirişləri artıq {target.mention} kanalına göndəriləcək!")
 
 # --- LEVEL ROLE ADMİN ƏMRLƏRİ ---
 @bot.hybrid_command(name="addlevelrole", description="[Admin] Müəyyən səviyyə üçün avtomatik rol mükafatı təyin edin.")
