@@ -704,6 +704,9 @@ async def clear_messages(ctx: commands.Context, amount: int):
         await ctx.send("❌ Silinəcək mesaj sayı 1 ilə 100 arasında olmalıdır!", ephemeral=True)
         return
 
+    # Defer interaction immediately so Discord 3-second timeout NEVER happens!
+    await ctx.defer(ephemeral=True)
+
     try:
         deleted = await ctx.channel.purge(limit=amount)
         deleted_count = len(deleted)
