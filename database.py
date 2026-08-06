@@ -71,6 +71,17 @@ def init_db():
                 channel_id BIGINT,
                 PRIMARY KEY (guild_id, log_type)
             );
+            CREATE TABLE IF NOT EXISTS banned_words (
+                guild_id BIGINT,
+                word TEXT,
+                PRIMARY KEY (guild_id, word)
+            );
+            CREATE TABLE IF NOT EXISTS warnings (
+                user_id BIGINT,
+                guild_id BIGINT,
+                warn_count INT DEFAULT 0,
+                PRIMARY KEY (user_id, guild_id)
+            );
         """)
     else:
         cursor.execute("""
@@ -112,6 +123,17 @@ def init_db():
                 log_type TEXT,
                 channel_id INTEGER,
                 PRIMARY KEY (guild_id, log_type)
+            );
+            CREATE TABLE IF NOT EXISTS banned_words (
+                guild_id INTEGER,
+                word TEXT,
+                PRIMARY KEY (guild_id, word)
+            );
+            CREATE TABLE IF NOT EXISTS warnings (
+                user_id INTEGER,
+                guild_id INTEGER,
+                warn_count INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, guild_id)
             );
         """)
 
@@ -299,3 +321,68 @@ def get_log_channels(guild_id: int) -> dict:
     rows = cursor.fetchall()
     conn.close()
     return {row[0]: row[1] for row in rows}
+
+# --- Banned Words (Qara Siyahı) DB ---
+def add_banned_word(guild_id: int, word: str) -> bool:
+    word = word.lower().strip()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(format_query("SELECT 1 FROM banned_words WHERE guild_id = ? AND word = ?"), (guild_id, word))
+    if cursor.fetchone():
+        conn.close()
+        return False
+    cursor.execute(format_query("INSERT INTO banned_words (guild_id, word) VALUES (?, ?)"), (guild_id, word))
+    conn.commit()
+    conn.close()
+    return True
+
+def remove_banned_word(guild_id: int, word: str) -> bool:
+    word = word.lower().strip()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(format_query("DELETE FROM banned_words WHERE guild_id = ? AND word = ?"), (guild_id, word))
+    rows_affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return rows_affected > 0
+
+def get_banned_words(guild_id: int) -> list:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(format_query("SELECT word FROM banned_words WHERE guild_id = ?"), (guild_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+# --- Warnings (Xəbərdarlıqlar) DB ---
+def add_warning(user_id: int, guild_id: int) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(format_query("SELECT warn_count FROM warnings WHERE user_id = ? AND guild_id = ?"), (user_id, guild_id))
+    row = cursor.fetchone()
+    
+    if row is None:
+        new_count = 1
+        cursor.execute(format_query("INSERT INTO warnings (user_id, guild_id, warn_count) VALUES (?, ?, 1)"), (user_id, guild_id))
+    else:
+        new_count = row[0] + 1
+        cursor.execute(format_query("UPDATE warnings SET warn_count = ? WHERE user_id = ? AND guild_id = ?"), (new_count, user_id, guild_id))
+        
+    conn.commit()
+    conn.close()
+    return new_count
+
+def reset_warnings(user_id: int, guild_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(format_query("UPDATE warnings SET warn_count = 0 WHERE user_id = ? AND guild_id = ?"), (user_id, guild_id))
+    conn.commit()
+    conn.close()
+
+def get_warnings(user_id: int, guild_id: int) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(format_query("SELECT warn_count FROM warnings WHERE user_id = ? AND guild_id = ?"), (user_id, guild_id))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0

@@ -1,7 +1,7 @@
 .env
 *.db
-*.sqlite3
-*.zip
-__pycache__/
-*.pyc
-.vscode/
+target/
+build/
+.gradle/
+*.class
+*.png
