@@ -50,6 +50,13 @@ class ModerationCog(commands.Cog):
                 
                 try:
                     await message.author.timeout(timeout_until, reason="3 Dəfə Xəbərdarlıq Aldığı Üçün Avtomatik Mute (10 dəq)")
+                    muted_role = discord.utils.get(message.guild.roles, name="Muted") or discord.utils.get(message.guild.roles, name="Susturulmuş")
+                    if muted_role:
+                        try:
+                            await message.author.add_roles(muted_role, reason="3 Xəbərdarlıq Limiti")
+                        except Exception:
+                            pass
+
                     await message.channel.send(
                         f"🚫 {message.author.mention} **3 dəfə xəbərdarlıq aldığı üçün 10 dəqiqəlik MUTE edildi!**",
                         delete_after=10
@@ -114,6 +121,8 @@ class ModerationCog(commands.Cog):
         try:
             await member.ban(reason=reason)
             await ctx.send(f"⛔ **{member.display_name}** serverdən banlandı! (Səbəb: {reason})")
+        except discord.Forbidden:
+            await ctx.send("❌ Xəta: Botun bu istifadəçini Banlamaq üçün hüququ çatmır! (Botun rolunu serverdə istifadəçinin rolundan yuxarı qaldırın və Bot-a 'Yasakla/Ban Members' hüququ verin)", ephemeral=True)
         except Exception as e:
             await ctx.send(f"❌ Banlama xətası: {e}", ephemeral=True)
 
@@ -124,7 +133,18 @@ class ModerationCog(commands.Cog):
         try:
             until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
             await member.timeout(until, reason=reason)
+
+            # Əgər serverdə 'Muted' və ya 'Susturulmuş' rolu varsa, həmin rolu da əlavə edirik
+            muted_role = discord.utils.get(ctx.guild.roles, name="Muted") or discord.utils.get(ctx.guild.roles, name="Susturulmuş")
+            if muted_role:
+                try:
+                    await member.add_roles(muted_role, reason=reason)
+                except Exception:
+                    pass
+
             await ctx.send(f"🔇 **{member.display_name}** `{minutes}` dəqiqəlik MUTE edildi! (Səbəb: {reason})")
+        except discord.Forbidden:
+            await ctx.send("❌ Xəta: Botun bu istifadəçini Mute etmək üçün hüququ çatmır! (Botun rolunu istifadəçinin rolundan yuxarı qaldırın və Bot-a 'Zamana Aşımı/Moderate Members' hüququ verin)", ephemeral=True)
         except Exception as e:
             await ctx.send(f"❌ Mute xətası: {e}", ephemeral=True)
 
@@ -134,7 +154,15 @@ class ModerationCog(commands.Cog):
     async def unmute_member(self, ctx: commands.Context, member: discord.Member):
         try:
             await member.timeout(None)
-            await ctx.send(f"🔊 **{member.display_name}** istifadəçisinin MUTE cəzası ləğv olundu!")
+            muted_role = discord.utils.get(ctx.guild.roles, name="Muted") or discord.utils.get(ctx.guild.roles, name="Susturulmuş")
+            if muted_role and muted_role in member.roles:
+                try:
+                    await member.remove_roles(muted_role)
+                except Exception:
+                    pass
+            await ctx.send(f"🔊 **{member.display_name}** istifadəçisinin MUTE cəzası ləğv olunumşdur!")
+        except discord.Forbidden:
+            await ctx.send("❌ Xəta: Botun bu istifadəçinin Mute cəzasını ləğv etmək üçün hüququ çatmır!", ephemeral=True)
         except Exception as e:
             await ctx.send(f"❌ Xəta: {e}", ephemeral=True)
 
