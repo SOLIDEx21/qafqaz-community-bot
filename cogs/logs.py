@@ -11,6 +11,131 @@ LOG_TYPES = [
     "kanal-log", "davet-log", "giriş-çıkış-log", "tag-log"
 ]
 
+# ==========================================
+# İNTERAKTİV LOG PANELS VIEW (DROPDOWNS & BUTTONS)
+# ==========================================
+
+class LogTypeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="mesaj-log", description="Mesaj silinmələri və dəyişiklikləri", emoji="💬"),
+            discord.SelectOption(label="giriş-çıkış-log", description="Serverə giriş və çıxışlar", emoji="📥"),
+            discord.SelectOption(label="rol-log", description="Rol əlavə etmə və silmələri", emoji="🎭"),
+            discord.SelectOption(label="isim-log", description="Nikneym dəyişiklikləri", emoji="🏷️"),
+            discord.SelectOption(label="ses-log", description="Səs kanalına giriş/çıxışlar", emoji="🔊"),
+            discord.SelectOption(label="kanal-log", description="Kanal yaradılması və silinməsi", emoji="#️⃣"),
+            discord.SelectOption(label="ban-log", description="Ban və unban hərəkətləri", emoji="⛔"),
+            discord.SelectOption(label="mod-log", description="Ümumi moderasiya logları", emoji="🛠️"),
+            discord.SelectOption(label="seviye-log", description="Level atlama bildirişləri", emoji="🏆"),
+            discord.SelectOption(label="tepki-log", description="Reaksiya əlavə/silmələri", emoji="➕")
+        ]
+        super().__init__(placeholder="⚙️ Log növünü seçin...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selected_log_type = self.values[0]
+        await interaction.response.send_message(
+            f"📌 **Seçilmiş Log Növü:** `{self.values[0]}`\nİndi aşağıdakı menyudan kanalı seçin və ya **🔴 Deaktiv Et** düyməsinə klikləyin.",
+            ephemeral=True
+        )
+
+class LogChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(placeholder="📢 Bağlanacaq kanalı seçin...", channel_types=[discord.ChannelType.text])
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_log = self.view.selected_log_type
+        if not selected_log:
+            await interaction.response.send_message("❌ Əvvəlcə yuxarıdakı menyudan Log növünü seçin!", ephemeral=True)
+            return
+        
+        channel = self.values[0]
+        db.set_log_channel(interaction.guild_id, selected_log, channel.id)
+        await self.view.refresh_panel(interaction, f"✅ **{selected_log}** üçün {channel.mention} kanalı təyin olundu!")
+
+class InteractiveLogView(discord.ui.View):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.selected_log_type = "mesaj-log"
+
+        self.add_item(LogTypeSelect())
+        self.add_item(LogChannelSelect())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Bu menyudan yalnız paneli açan şəxs istifadə edə bilər!", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="🔴 Deaktiv Et", style=discord.ButtonStyle.danger, row=2)
+    async def disable_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_log_type:
+            await interaction.response.send_message("❌ Əvvəlcə Log növünü seçin!", ephemeral=True)
+            return
+        
+        db.remove_log_channel(interaction.guild_id, self.selected_log_type)
+        await self.refresh_panel(interaction, f"🔴 **{self.selected_log_type}** ləğv edildi (Deaktif).")
+
+    @discord.ui.button(label="🔄 Paneli Yenilə", style=discord.ButtonStyle.secondary, row=2)
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.refresh_panel(interaction, "🔄 Log Paneli Yeniləndi!")
+
+    async def refresh_panel(self, interaction: discord.Interaction, notice: str):
+        embed = create_logs_embed(interaction.guild, interaction.user.display_name)
+        if interaction.response.is_done():
+            await interaction.followup.send(notice, ephemeral=True)
+            await interaction.message.edit(embed=embed, view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
+            await interaction.followup.send(notice, ephemeral=True)
+
+def create_logs_embed(guild: discord.Guild, user_name: str) -> discord.Embed:
+    log_channels = db.get_log_channels(guild.id)
+    now_str = datetime.datetime.now().strftime("%d.%m.%Y – %H:%M:%S")
+
+    def status_str(l_type: str) -> str:
+        ch_id = log_channels.get(l_type)
+        if ch_id:
+            ch = guild.get_channel(ch_id)
+            if ch:
+                return f"🟢 {ch.mention}"
+        return "🔘 `Deaktif`"
+
+    embed = discord.Embed(
+        title="📋 QAFQAZ GAMING COMMUNITY AZ Logları",
+        color=discord.Color.dark_theme(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+
+    mod_logs_desc = (
+        f"• 👤 · **ban-log:** {status_str('ban-log')}\n"
+        f"• 👤 · **mute-log:** {status_str('mute-log')}\n"
+        f"• ⛓️ · **jail-log:** {status_str('jail-log')}\n"
+        f"• 🛠️ · **mod-log:** {status_str('mod-log')}"
+    )
+
+    genel_logs_desc = (
+        f"🎭 `@` · **rol-log:** {status_str('rol-log')}  |  "
+        f"🎭 ➕ · **tepki-log:** {status_str('tepki-log')}  |  "
+        f"😀 · **emoji-log:** {status_str('emoji-log')}\n"
+        f"📞 ⚙️ · **talep-log:** {status_str('talep-log')}  |  "
+        f"💬 · **mesaj-log:** {status_str('mesaj-log')}  |  "
+        f"🏆 · **seviye-log:** {status_str('seviye-log')}\n"
+        f"🏷️ · **isim-log:** {status_str('isim-log')}  |  "
+        f"🔊 · **ses-log:** {status_str('ses-log')}  |  "
+        f"#️⃣ · **kanal-log:** {status_str('kanal-log')}\n"
+        f"🔗 · **davet-log:** {status_str('davet-log')}  |  "
+        f"📥📤 · **giriş-çıkış-log:** {status_str('giriş-çıkış-log')}  |  "
+        f"#️⃣ · **tag-log:** {status_str('tag-log')}"
+    )
+
+    embed.add_field(name="🛡️ Moderasyon Logları:", value=mod_logs_desc, inline=False)
+    embed.add_field(name="📜 Genel Loglar:", value=genel_logs_desc, inline=False)
+    embed.set_thumbnail(url="https://i.imgur.com/b4z0S8u.png")
+    embed.set_footer(text=f"Sorgulayan: {user_name} | Son güncellenme: {now_str}")
+
+    return embed
+
 class LogsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -97,7 +222,6 @@ class LogsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        # Nikneym dəyişikliyi (isim-log)
         if before.nick != after.nick:
             embed = discord.Embed(
                 title="🏷️ Nikneym Dəyişdirildi (isim-log)",
@@ -110,7 +234,6 @@ class LogsCog(commands.Cog):
             embed.set_thumbnail(url=after.display_avatar.url)
             await self.send_log(after.guild, "isim-log", embed)
 
-        # Rol dəyişikliyi (rol-log)
         if before.roles != after.roles:
             added_roles = [r for r in after.roles if r not in before.roles]
             removed_roles = [r for r in before.roles if r not in after.roles]
@@ -195,57 +318,15 @@ class LogsCog(commands.Cog):
         await self.send_log(guild, "mod-log", embed)
 
     # ==========================================
-    # DASHBOARD VƏ SETTINGS COMMANDS
+    # İNTERAKTİV CONTROL PANEL COMMAND
     # ==========================================
 
-    @commands.hybrid_command(name="logs", description="Serverin Bütün Log Sisteminin Panelinə (Dashboard) baxın.")
+    @commands.hybrid_command(name="logs", description="[Admin] İnteraktiv Log Paneli (Tıklana bilən Tənzimləmə Menyusu)")
+    @commands.has_permissions(administrator=True)
     async def logs_dashboard(self, ctx: commands.Context):
-        log_channels = db.get_log_channels(ctx.guild.id)
-        now_str = datetime.datetime.now().strftime("%d.%m.%Y – %H:%M:%S")
-
-        def status_str(l_type: str) -> str:
-            ch_id = log_channels.get(l_type)
-            if ch_id:
-                ch = ctx.guild.get_channel(ch_id)
-                if ch:
-                    return f"🟢 {ch.mention}"
-            return "🔘 `Deaktif`"
-
-        embed = discord.Embed(
-            title="📋 QAFQAZ GAMING COMMUNITY AZ Logları",
-            color=discord.Color.dark_theme(),
-            timestamp=datetime.datetime.now(datetime.timezone.utc)
-        )
-
-        mod_logs_desc = (
-            f"• 👤 · **ban-log:** {status_str('ban-log')}\n"
-            f"• 👤 · **mute-log:** {status_str('mute-log')}\n"
-            f"• ⛓️ · **jail-log:** {status_str('jail-log')}\n"
-            f"• 🛠️ · **mod-log:** {status_str('mod-log')}"
-        )
-
-        genel_logs_desc = (
-            f"🎭 `@` · **rol-log:** {status_str('rol-log')}  |  "
-            f"🎭 ➕ · **tepki-log:** {status_str('tepki-log')}  |  "
-            f"😀 · **emoji-log:** {status_str('emoji-log')}\n"
-            f"📞 ⚙️ · **talep-log:** {status_str('talep-log')}  |  "
-            f"💬 · **mesaj-log:** {status_str('mesaj-log')}  |  "
-            f"🏆 · **seviye-log:** {status_str('seviye-log')}\n"
-            f"🏷️ · **isim-log:** {status_str('isim-log')}  |  "
-            f"🔊 · **ses-log:** {status_str('ses-log')}  |  "
-            f"#️⃣ · **kanal-log:** {status_str('kanal-log')}\n"
-            f"🔗 · **davet-log:** {status_str('davet-log')}  |  "
-            f"📥📤 · **giriş-çıkış-log:** {status_str('giriş-çıkış-log')}  |  "
-            f"#️⃣ · **tag-log:** {status_str('tag-log')}"
-        )
-
-        embed.add_field(name="🛡️ Moderasyon Logları:", value=mod_logs_desc, inline=False)
-        embed.add_field(name="📜 Genel Loglar:", value=genel_logs_desc, inline=False)
-
-        embed.set_thumbnail(url="https://i.imgur.com/b4z0S8u.png")
-        embed.set_footer(text=f"Sorgulayan: {ctx.author.display_name} | Son güncellenme: {now_str}")
-
-        await ctx.send(embed=embed)
+        embed = create_logs_embed(ctx.guild, ctx.author.display_name)
+        view = InteractiveLogView(author_id=ctx.author.id)
+        await ctx.send(embed=embed, view=view)
 
     @commands.hybrid_command(name="setlogchannel", description="[Admin] Müəyyən log növü üçün kanalı təyin edin və ya silin.")
     @commands.has_permissions(administrator=True)
