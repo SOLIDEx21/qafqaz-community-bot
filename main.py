@@ -3,8 +3,9 @@ import sqlite3
 import random
 import time
 import asyncio
+import re
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 from dotenv import load_dotenv
 from aiohttp import web
@@ -45,9 +46,11 @@ async def start_web_server():
 DB_NAME = "qafqaz_community.db"
 
 def init_db():
-    """Məlumat bazasını, istifadəçi cədvəlini və tənzimləmələri yaradır."""
+    """Məlumat bazasını, istifadəçi, tənzimləmə və çəkiliş cədvəllərini yaradır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    
+    # XP və Level Cədvəli
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER,
@@ -58,17 +61,43 @@ def init_db():
             PRIMARY KEY (user_id, guild_id)
         )
     """)
+    
+    # Server Tənzimləmələri
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id INTEGER PRIMARY KEY,
             level_channel_id INTEGER
         )
     """)
+    
+    # Çəkilişlər (Giveaway) Cədvəli
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS giveaways (
+            giveaway_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER UNIQUE,
+            channel_id INTEGER,
+            guild_id INTEGER,
+            prize TEXT,
+            winner_count INTEGER,
+            end_timestamp INTEGER,
+            ended INTEGER DEFAULT 0
+        )
+    """)
+    
+    # Çəkilişə Qatılanlar Cədvəli
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS giveaway_participants (
+            message_id INTEGER,
+            user_id INTEGER,
+            PRIMARY KEY (message_id, user_id)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
+# --- XP Məntiqi ---
 def get_user_data(user_id: int, guild_id: int):
-    """İstifadəçinin bazadakı məlumatlarını qaytarır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT xp, level, last_msg FROM users WHERE user_id = ? AND guild_id = ?", (user_id, guild_id))
@@ -85,7 +114,6 @@ def get_user_data(user_id: int, guild_id: int):
     return xp, level, last_msg
 
 def update_user_data(user_id: int, guild_id: int, xp: int, level: int, last_msg: int):
-    """İstifadəçinin XP, Level və son mesaj vaxtını yeniləyir."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -97,7 +125,6 @@ def update_user_data(user_id: int, guild_id: int, xp: int, level: int, last_msg:
     conn.close()
 
 def set_guild_level_channel(guild_id: int, channel_id: int):
-    """Server üçün səviyyə-atlama bildiriş kanalını bazada yadda saxlayır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -109,7 +136,6 @@ def set_guild_level_channel(guild_id: int, channel_id: int):
     conn.close()
 
 def get_guild_level_channel_id(guild_id: int):
-    """Serverin səviyyə bildiriş kanalının ID-sini qaytarır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT level_channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,))
@@ -118,7 +144,6 @@ def get_guild_level_channel_id(guild_id: int):
     return row[0] if row else None
 
 def get_user_rank(user_id: int, guild_id: int):
-    """İstifadəçinin server üzrə sıralamasını (Rank) hesablayır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -135,7 +160,6 @@ def get_user_rank(user_id: int, guild_id: int):
     return len(rows)
 
 def get_top_users(guild_id: int, limit: int = 10):
-    """Server üzrə ən yüksək səviyyəli və XP-li istifadəçiləri qaytarır."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -149,18 +173,146 @@ def get_top_users(guild_id: int, limit: int = 10):
     return rows
 
 def xp_needed_for_level(level: int) -> int:
-    """Növbəti səviyyəyə keçmək üçün tələb olunan XP hesablama düsturu."""
     return (level + 1) * 100
 
+# --- Giveaway DB funksiyaları ---
+def add_giveaway(message_id: int, channel_id: int, guild_id: int, prize: str, winner_count: int, end_timestamp: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO giveaways (message_id, channel_id, guild_id, prize, winner_count, end_timestamp, ended)
+        VALUES (?, ?, ?, ?, ?, ?, 0)
+    """, (message_id, channel_id, guild_id, prize, winner_count, end_timestamp))
+    conn.commit()
+    conn.close()
+
+def toggle_giveaway_participant(message_id: int, user_id: int) -> bool:
+    """İstifadəçini çəkilişə əlavə edir və ya çıxarır. Əgər əlavə olundusa True, çıxarıldısa False qaytarır."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM giveaway_participants WHERE message_id = ? AND user_id = ?", (message_id, user_id))
+    exists = cursor.fetchone()
+    
+    if exists:
+        cursor.execute("DELETE FROM giveaway_participants WHERE message_id = ? AND user_id = ?", (message_id, user_id))
+        joined = False
+    else:
+        cursor.execute("INSERT INTO giveaway_participants (message_id, user_id) VALUES (?, ?)", (message_id, user_id))
+        joined = True
+
+    conn.commit()
+    conn.close()
+    return joined
+
+def get_giveaway_participants(message_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM giveaway_participants WHERE message_id = ?", (message_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
+def get_active_giveaways():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT message_id, channel_id, guild_id, prize, winner_count, end_timestamp FROM giveaways WHERE ended = 0")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def mark_giveaway_ended(message_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE giveaways SET ended = 1 WHERE message_id = ?", (message_id,))
+    conn.commit()
+    conn.close()
+
+def parse_duration(duration_str: str) -> int:
+    """Məsələn '10s', '5m', '2h', '1d' daxil etdikdə saniyəyə çevirir."""
+    match = re.match(r"^(\d+)([smhd])$", duration_str.lower().strip())
+    if not match:
+        return 0
+    value, unit = int(match.group(1)), match.group(2)
+    unit_seconds = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
+    return value * unit_seconds.get(unit, 0)
+
 # ==========================================
-# BOT HADİSƏLƏRİ (EVENTS)
+# GIVEAWAY DÜYMƏSİ (UI VIEW)
 # ==========================================
+class GiveawayView(discord.ui.View):
+    def __init__(self, message_id: int = None):
+        super().__init__(timeout=None)
+        self.message_id = message_id
+
+    @discord.ui.button(label="🎉 Çəkilişə Qatıl", style=discord.ButtonStyle.primary, custom_id="giveaway_entry_button")
+    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        msg_id = self.message_id or interaction.message.id
+        user_id = interaction.user.id
+        
+        joined = toggle_giveaway_participant(msg_id, user_id)
+        count = len(get_giveaway_participants(msg_id))
+
+        if joined:
+            await interaction.response.send_message(f"🎉 **Təbrik edirik {interaction.user.mention}!** Çəkilişə uğurla qatıldınız! (Cəmi qatılan: {count})", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ **{interaction.user.mention}**, siz çəkilişdən çıxdınız. (Cəmi qatılan: {count})", ephemeral=True)
+
+# ==========================================
+# BOT HADİSƏLƏRİ VƏ BACKGROUND TASK
+# ==========================================
+@tasks.loop(seconds=10)
+async def check_giveaways():
+    """Hər 10 saniyədən bir vaxtı bitən çəkilişləri yoxlayır və qalibləri elan edir."""
+    active_giveaways = get_active_giveaways()
+    now = int(time.time())
+
+    for msg_id, channel_id, guild_id, prize, winner_count, end_timestamp in active_giveaways:
+        if now >= end_timestamp:
+            mark_giveaway_ended(msg_id)
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                continue
+
+            try:
+                msg = await channel.fetch_message(msg_id)
+            except Exception:
+                continue
+
+            participants = get_giveaway_participants(msg_id)
+
+            if not participants:
+                embed = discord.Embed(
+                    title="🎉 ÇƏKİLİŞ BİTDİ (Qalib Yoxdur)",
+                    description=f"**Mükafat:** {prize}\n\n❌ Heç kim çəkilişə qatılmadığı üçün qalib seçilmədi.",
+                    color=discord.Color.red()
+                )
+                await msg.edit(embed=embed, view=None)
+                await channel.send(f"⚠️ **{prize}** çəkilişi başa çatdı, lakin heç kim qatılmadığı üçün qalib seçilmədi!")
+            else:
+                winners_count = min(len(participants), winner_count)
+                winner_ids = random.sample(participants, winners_count)
+                winner_mentions = ", ".join([f"<@{uid}>" for uid in winner_ids])
+
+                embed = discord.Embed(
+                    title="🎉 ÇƏKİLİŞ BAŞA ÇATDI!",
+                    description=f"**Mükafat:** {prize}\n**Qalib(lər):** {winner_mentions}\n**Cəmi Qatılan:** `{len(participants)}` nəfər",
+                    color=discord.Color.gold()
+                )
+                await msg.edit(embed=embed, view=None)
+                await channel.send(f"🎊 **TEBRİKLƏR!** {winner_mentions}\nSiz **{prize}** çəkilişində qalib gəldiniz! 🥳")
 
 @bot.event
 async def on_ready():
     init_db()
     # Web serveri arxa fonda başladırıq (Render Free Tier üçün)
     asyncio.create_task(start_web_server())
+    
+    # Düzgün düymə idarəçiliyi üçün persistent view register edirik
+    bot.add_view(GiveawayView())
+    
+    # Çəkiliş taymerini başladırıq
+    if not check_giveaways.is_running():
+        check_giveaways.start()
 
     try:
         synced = await bot.tree.sync()
@@ -173,7 +325,6 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Botların öz mesajlarını və ya DM mesajlarını nəzərə almırıq
     if message.author.bot or message.guild is None:
         return
 
@@ -183,7 +334,7 @@ async def on_message(message: discord.Message):
 
     xp, level, last_msg = get_user_data(user_id, guild_id)
 
-    # HER MESAJA XP: Heç bir delay/cooldown olmadan hər mesaja 2 ilə 3 XP verilir
+    # HER MESAJA XP: 2-3 XP verilir
     gained_xp = random.randint(2, 3)
     new_xp = xp + gained_xp
     needed_xp = xp_needed_for_level(level)
@@ -193,25 +344,21 @@ async def on_message(message: discord.Message):
         new_level = level + 1
         update_user_data(user_id, guild_id, new_xp, new_level, current_time)
 
-        # Level atlama mesajı üçün kanalı təyin edirik
         target_channel = None
         saved_channel_id = get_guild_level_channel_id(guild_id)
         
         if saved_channel_id:
             target_channel = message.guild.get_channel(saved_channel_id)
         
-        # Əgər xüsusi kanal seçilməyibsə, adı "seviye-atlama" və ya benzer olan kanalı avtomatik axtarırıq
         if target_channel is None:
             for ch in message.guild.text_channels:
                 if "seviye" in ch.name.lower() or "level" in ch.name.lower():
                     target_channel = ch
                     break
 
-        # Əgər heç bir kanal tapılmazsa, mesajın yazıldığı kanala göndərilir
         if target_channel is None:
             target_channel = message.channel
 
-        # Təbrik mesajı göndəririk (mention ilə)
         embed = discord.Embed(
             title="🎉 SƏVİYYƏ ATLANDI!",
             description=f"Təbrik edirik {message.author.mention}!\nSənin aktivliyin **Qafqaz Community** serverində yüksəlir!",
@@ -229,14 +376,12 @@ async def on_message(message: discord.Message):
     else:
         update_user_data(user_id, guild_id, new_xp, level, current_time)
 
-    # Prefiks əmrlərini işlətmək üçün vacibdir
     await bot.process_commands(message)
 
 # ==========================================
-# ƏMRLƏR (COMMANDS & SLASH COMMANDS)
+# XP VƏ LEVEL ƏMRLƏRİ
 # ==========================================
 
-# 1. RANK / STATS ƏMRİ
 @bot.hybrid_command(name="rank", description="Özünüzün və ya başqa istifadəçinin XP və Level göstəricilərinə baxın.")
 @app_commands.describe(member="Göstəricilərinə baxmaq istədiyiniz istifadəçi")
 async def rank(ctx: commands.Context, member: discord.Member = None):
@@ -249,7 +394,6 @@ async def rank(ctx: commands.Context, member: discord.Member = None):
     rank_pos = get_user_rank(target.id, ctx.guild.id)
     needed_xp = xp_needed_for_level(level)
 
-    # İrəliləyiş çubuğu (Progress bar)
     progress_ratio = min(xp / needed_xp, 1.0)
     bar_length = 10
     filled = int(progress_ratio * bar_length)
@@ -268,7 +412,6 @@ async def rank(ctx: commands.Context, member: discord.Member = None):
 
     await ctx.send(embed=embed)
 
-# 2. LEADERBOARD (LİDERLƏR LÖVHƏSİ) ƏMRİ
 @bot.hybrid_command(name="leaderboard", description="Serverin ən aktiv 10 istifadəçisini göstərir.")
 async def leaderboard(ctx: commands.Context):
     top_users = get_top_users(ctx.guild.id, limit=10)
@@ -296,21 +439,6 @@ async def leaderboard(ctx: commands.Context):
 
     await ctx.send(embed=embed)
 
-# 3. KÖMƏK ƏMRİ
-@bot.hybrid_command(name="botinfo", description="Bot haqqında məlumat və server qaydalarını göstərir.")
-async def botinfo(ctx: commands.Context):
-    embed = discord.Embed(
-        title="🇦🇿 Qafqaz Community Bot",
-        description="Qafqaz Community serveri üçün xüsusi hazırlanmış XP və Level idarəetmə botu.",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="📌 Əmrlər", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10 sıralaması\n`/setlevelchannel` - Level atlama kanalını təyin edin\n`/botinfo` - Bot haqqında məlumat", inline=False)
-    embed.add_field(name="💡 XP Təlimatı", value="Kanallarda hər yazdığınız mesaja görə dərhal 2-3 XP qazanırsınız.", inline=False)
-    embed.set_footer(text="Qafqaz Community Bot • Render 7/24 Hosting Ready")
-
-    await ctx.send(embed=embed)
-
-# 4. ADMİN: LEVEL ATLAMAK KANALINI TƏYİN ET
 @bot.hybrid_command(name="setlevelchannel", description="[Admin] Səviyyə atlama bildirişlərinin göndəriləcəyi kanalı seçin.")
 @commands.has_permissions(administrator=True)
 @app_commands.describe(channel="Level atlama bildirişlərinin düşəcəyi kanal")
@@ -318,44 +446,103 @@ async def setlevelchannel(ctx: commands.Context, channel: discord.TextChannel):
     set_guild_level_channel(ctx.guild.id, channel.id)
     await ctx.send(f"✅ Səviyyə atlama bildirişləri artıq {channel.mention} kanalına göndəriləcək!")
 
-@setlevelchannel.error
-async def setlevelchannel_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Bu əmri istifadə etmək üçün Administrator hüququnuz olmalıdır!", ephemeral=True)
+# ==========================================
+# GIVEAWAY (ÇƏKİLİŞ) ƏMRLƏRİ
+# ==========================================
 
-# 5. ADMİN: XP ƏLAVƏ ET
-@bot.hybrid_command(name="addxp", description="[Admin] İstifadəçiyə XP əlavə et.")
-@commands.has_permissions(administrator=True)
-@app_commands.describe(member="XP verilməli olan istifadəçi", amount="Əlavə ediləcək XP miqdarı")
-async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
-    if amount <= 0:
-        await ctx.send("❌ Miqdar müsbət ədəd olmalıdır!", ephemeral=True)
+@bot.hybrid_command(name="gstart", description="[Admin] Yeni çəkiliş başlaşdırın.")
+@commands.has_permissions(manage_messages=True)
+@app_commands.describe(
+    duration="Çəkiliş vaxtı (məs: 10s, 5m, 2h, 1d)",
+    winners="Qalib sayı (məs: 1)",
+    prize="Mükafatın adı"
+)
+async def gstart(ctx: commands.Context, duration: str, winners: int, prize: str):
+    seconds = parse_duration(duration)
+    if seconds <= 0:
+        await ctx.send("❌ Yanlış vaxt formatı! Nümunə: `10m` (10 dəqiqə), `2h` (2 saat), `1d` (1 gün).", ephemeral=True)
         return
 
-    xp, level, last_msg = get_user_data(member.id, ctx.guild.id)
-    new_xp = xp + amount
-    needed_xp = xp_needed_for_level(level)
+    if winners <= 0:
+        await ctx.send("❌ Qalib sayı ən azı 1 olmalıdır!", ephemeral=True)
+        return
 
-    leveled_up = False
-    while new_xp >= needed_xp:
-        new_xp -= needed_xp
-        level += 1
-        needed_xp = xp_needed_for_level(level)
-        leveled_up = True
+    end_timestamp = int(time.time()) + seconds
 
-    update_user_data(member.id, ctx.guild.id, new_xp, level, last_msg)
+    embed = discord.Embed(
+        title=f"🎉 ÇƏKİLİŞ: {prize}",
+        description=f"Qatılmaq üçün aşağıdakı **🎉 Çəkilişə Qatıl** düyməsinə klikləyin!\n\n"
+                    f"🏆 **Qalib Sayı:** `{winners}`\n"
+                    f"⏱️ **Bitiş Vaxtı:** <t:{end_timestamp}:R> (<t:{end_timestamp}:f>)\n"
+                    f"👑 **Təşkilatçı:** {ctx.author.mention}",
+        color=discord.Color.blurple()
+    )
+    embed.set_footer(text="Qafqaz Community Giveaway System")
 
-    msg = f"✅ **{member.display_name}** istifadəçisinə `{amount}` XP əlavə olundu!"
-    if leveled_up:
-        msg += f" Yeni Səviyyəsi: **Level {level}** 🚀"
+    msg = await ctx.send(embed=embed)
+    view = GiveawayView(message_id=msg.id)
+    await msg.edit(view=view)
 
-    await ctx.send(msg)
+    add_giveaway(msg.id, ctx.channel.id, ctx.guild.id, prize, winners, end_timestamp)
 
-# Admin xətalarını tutmaq üçün
-@addxp.error
-async def addxp_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Bu əmri istifadə etmək üçün Administrator hüququnuz olmalıdır!", ephemeral=True)
+@bot.hybrid_command(name="greroll", description="[Admin] Bitmiş çəkilişdə yeni qalib seçin.")
+@commands.has_permissions(manage_messages=True)
+@app_commands.describe(message_id="Çəkiliş mesajının ID-si")
+async def greroll(ctx: commands.Context, message_id: str):
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await ctx.send("❌ Yanlış Mesaj ID-si!", ephemeral=True)
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT prize, winner_count FROM giveaways WHERE message_id = ?", (msg_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        await ctx.send("❌ Bu ID ilə çəkiliş tapılmadı!", ephemeral=True)
+        return
+
+    prize, winner_count = row
+    participants = get_giveaway_participants(msg_id)
+
+    if not participants:
+        await ctx.send("❌ Bu çəkilişə heç kim qatılmadığı üçün yeni qalib seçilə bilməz!")
+        return
+
+    winners_count = min(len(participants), winner_count)
+    new_winners = random.sample(participants, winners_count)
+    winner_mentions = ", ".join([f"<@{uid}>" for uid in new_winners])
+
+    await ctx.send(f"🎉 **YENİ QALİB SEÇİLDİ!**\n**Mükafat:** {prize}\n**Yeni Qalib(lər):** {winner_mentions} 🥳")
+
+@bot.hybrid_command(name="gend", description="[Admin] Çəkilişi vaxtından əvvəl bitirin.")
+@commands.has_permissions(manage_messages=True)
+@app_commands.describe(message_id="Çəkiliş mesajının ID-si")
+async def gend(ctx: commands.Context, message_id: str):
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await ctx.send("❌ Yanlış Mesaj ID-si!", ephemeral=True)
+        return
+
+    mark_giveaway_ended(msg_id)
+    await ctx.send("✅ Çəkiliş uğurla vaxtından əvvəl bitirildi! (Növbəti yoxlamada qalib elan olunacaq)")
+
+@bot.hybrid_command(name="botinfo", description="Bot haqqında məlumat və server qaydalarını göstərir.")
+async def botinfo(ctx: commands.Context):
+    embed = discord.Embed(
+        title="🇦🇿 Qafqaz Community Bot",
+        description="Qafqaz Community serveri üçün xüsusi hazırlanmış XP, Level və Çəkiliş botu.",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="📌 XP Əmrləri", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10 sıralaması\n`/setlevelchannel` - Level kanalı seçin", inline=False)
+    embed.add_field(name="🎉 Çəkiliş Əmrləri", value="`/gstart <vaxt> <qalib_sayı> <mükafat>` - Yeni çəkiliş\n`/greroll <message_id>` - Yeni qalib seç\n`/gend <message_id>` - Çəkilişi bitir", inline=False)
+    embed.set_footer(text="Qafqaz Community Bot • Render 7/24 Hosting Ready")
+
+    await ctx.send(embed=embed)
 
 # ==========================================
 # BOTU BAŞLATMAQ
