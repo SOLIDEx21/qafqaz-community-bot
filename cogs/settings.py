@@ -19,11 +19,15 @@ class MasterCategorySelect(discord.ui.Select):
         super().__init__(placeholder="🛠️ Tənzimləmək istədiyiniz Bölməni Seçin...", min_values=1, max_values=1, options=options, row=0)
 
     async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if not view:
+            return
         try:
-            self.view.current_category = self.values[0]
-            self.view.update_components_for_category()
-            embed = self.view.get_embed_for_category(interaction.guild, self.values[0])
-            await interaction.response.edit_message(embed=embed, view=self.view)
+            category = self.values[0]
+            view.current_category = category
+            view.update_components_for_category()
+            embed = view.get_embed_for_category(interaction.guild, category)
+            await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
             print(f"[ERROR MasterCategorySelect]: {e}")
             if not interaction.response.is_done():
@@ -36,11 +40,14 @@ class LevelChannelSelect(discord.ui.ChannelSelect):
         super().__init__(placeholder="🏆 Səviyyə Atlama Kanalını Seçin...", channel_types=[discord.ChannelType.text], row=1)
 
     async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if not view:
+            return
         try:
             channel = self.values[0]
             db.set_guild_level_channel(interaction.guild_id, channel.id)
-            embed = self.view.get_embed_for_category(interaction.guild, "level")
-            await interaction.response.edit_message(embed=embed, view=self.view)
+            embed = view.get_embed_for_category(interaction.guild, "level")
+            await interaction.response.edit_message(embed=embed, view=view)
             await interaction.followup.send(f"✅ Səviyyə atlama bildirişləri {channel.mention} kanalına bağlandı!", ephemeral=True)
         except Exception as e:
             print(f"[ERROR LevelChannelSelect]: {e}")
@@ -60,8 +67,11 @@ class LogTypeSelectMenu(discord.ui.Select):
         super().__init__(placeholder="📜 Log növünü seçin...", min_values=1, max_values=1, options=options, row=1)
 
     async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if not view:
+            return
         try:
-            self.view.selected_log_type = self.values[0]
+            view.selected_log_type = self.values[0]
             await interaction.response.send_message(
                 f"📌 **Seçilmiş Log Növü:** `{self.values[0]}`\nİndi aşağıdakı menyudan kanalı seçin və ya **🔴 Deaktiv Et** düyməsinə klikləyin.",
                 ephemeral=True
@@ -74,12 +84,15 @@ class LogChannelSelectMenu(discord.ui.ChannelSelect):
         super().__init__(placeholder="📢 Seçilmiş Log üçün kanalı təyin edin...", channel_types=[discord.ChannelType.text], row=2)
 
     async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if not view:
+            return
         try:
-            selected_log = getattr(self.view, 'selected_log_type', 'mesaj-log')
+            selected_log = getattr(view, 'selected_log_type', 'mesaj-log')
             channel = self.values[0]
             db.set_log_channel(interaction.guild_id, selected_log, channel.id)
-            embed = self.view.get_embed_for_category(interaction.guild, "logs")
-            await interaction.response.edit_message(embed=embed, view=self.view)
+            embed = view.get_embed_for_category(interaction.guild, "logs")
+            await interaction.response.edit_message(embed=embed, view=view)
             await interaction.followup.send(f"✅ **{selected_log}** üçün {channel.mention} kanalı təyin olundu!", ephemeral=True)
         except Exception as e:
             print(f"[ERROR LogChannelSelectMenu]: {e}")
@@ -89,11 +102,14 @@ class DisableLogButton(discord.ui.Button):
         super().__init__(label="🔴 Logu Deaktiv Et", style=discord.ButtonStyle.danger, row=3)
 
     async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if not view:
+            return
         try:
-            log_type = getattr(self.view, 'selected_log_type', 'mesaj-log')
+            log_type = getattr(view, 'selected_log_type', 'mesaj-log')
             db.remove_log_channel(interaction.guild_id, log_type)
-            embed = self.view.get_embed_for_category(interaction.guild, "logs")
-            await interaction.response.edit_message(embed=embed, view=self.view)
+            embed = view.get_embed_for_category(interaction.guild, "logs")
+            await interaction.response.edit_message(embed=embed, view=view)
             await interaction.followup.send(f"🔴 **{log_type}** ləğv edildi (Deaktif).", ephemeral=True)
         except Exception as e:
             print(f"[ERROR DisableLogButton]: {e}")
@@ -103,9 +119,12 @@ class RefreshPanelButton(discord.ui.Button):
         super().__init__(label="🔄 Paneli Yenilə", style=discord.ButtonStyle.secondary, row=3)
 
     async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if not view:
+            return
         try:
-            embed = self.view.get_embed_for_category(interaction.guild, self.view.current_category)
-            await interaction.response.edit_message(embed=embed, view=self.view)
+            embed = view.get_embed_for_category(interaction.guild, view.current_category)
+            await interaction.response.edit_message(embed=embed, view=view)
             await interaction.followup.send("🔄 Panel yeniləndi!", ephemeral=True)
         except Exception as e:
             print(f"[ERROR RefreshPanelButton]: {e}")
