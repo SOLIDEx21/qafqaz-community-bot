@@ -498,6 +498,7 @@ async def on_ready():
     if not check_giveaways.is_running():
         check_giveaways.start()
 
+    # ANINDA (INSTANT) SLASH COMMAND SYNC
     try:
         global_synced = await bot.tree.sync()
         print(f"[GLOBAL SYNC] {len(global_synced)} qlobal slash əmri sinxronlaşdırıldı.")
@@ -667,7 +668,6 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     needed_xp = xp_needed_for_level(level)
 
     leveled_up = False
-    old_level = level
     while new_xp >= needed_xp:
         new_xp -= needed_xp
         level += 1
@@ -679,7 +679,6 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     new_roles = []
     if leveled_up:
         new_roles = await check_and_grant_level_roles(member, level)
-        # Səviyyə atlama bildirişini XÜSUSİ KANALA (seviye-atlama) göndəririk!
         await send_level_up_notice(member, level, new_roles, ctx.channel)
 
     msg = f"✅ **{member.display_name}** istifadəçisinə `{amount}` XP əlavə olundu!"
@@ -695,6 +694,30 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
 async def addxp_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ Bu əmri istifadə etmək üçün Administrator hüququnuz olmalıdır!", ephemeral=True)
+
+# --- ADMİN: MESAJ SİL / CLEAR / PURGE (/clear) ---
+@bot.hybrid_command(name="clear", aliases=["purge", "sil"], description="[Admin] Kanaldakı mesajları toplu şəkildə silin (Maksimum 100).")
+@commands.has_permissions(manage_messages=True)
+@app_commands.describe(amount="Silinəcək mesaj sayı (1-100)")
+async def clear_messages(ctx: commands.Context, amount: int):
+    if amount <= 0 or amount > 100:
+        await ctx.send("❌ Silinəcək mesaj sayı 1 ilə 100 arasında olmalıdır!", ephemeral=True)
+        return
+
+    try:
+        # Mesajları silirik
+        deleted = await ctx.channel.purge(limit=amount)
+        deleted_count = len(deleted)
+        
+        # 5 saniyə sonra avtomatik silinən bildiriş mesajı
+        await ctx.send(f"🧹 **{deleted_count}** ədəd mesaj uğurla silindi!", delete_after=5)
+    except Exception as e:
+        await ctx.send(f"❌ Mesajlar silinərkən xəta yarandı: {e}", ephemeral=True)
+
+@clear_messages.error
+async def clear_messages_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Bu əmri istifadə etmək üçün Mesajları İdarə Et hüququnuz olmalıdır!", ephemeral=True)
 
 # Alternativ Prefiks/Hybrid Çəkiliş Əmrləri
 @bot.hybrid_command(name="gstart", description="[Admin] Yeni çəkiliş başladın.")
@@ -739,7 +762,8 @@ async def botinfo(ctx: commands.Context):
         description="Qafqaz Community serveri üçün xüsusi hazırlanmış XP, Level, Rol və Çəkiliş botu.",
         color=discord.Color.green()
     )
-    embed.add_field(name="📌 XP & Rol Əmrləri", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10\n`/levelroles` - Rol mükafatları\n`/addxp <user> <amount>` - [Admin] XP ver\n`/addlevelrole <level> <role>` - [Admin] Rol təyin et", inline=False)
+    embed.add_field(name="📌 Admin & Təmizlik Əmrləri", value="`/clear <say>` - Mesajları sil (maks 100)\n`/addxp <user> <amount>` - XP ver\n`/addlevelrole <level> <role>` - Rol təyin et", inline=False)
+    embed.add_field(name="📌 XP & Rol Əmrləri", value="`/rank` - Statlarınıza baxın\n`/leaderboard` - Top 10\n`/levelroles` - Rol mükafatları", inline=False)
     embed.add_field(name="🎉 Çəkiliş Əmrləri", value="`/giveaway start <vaxt> <qalib_sayı> <mükafat>`\n`/gstart <vaxt> <qalib_sayı> <mükafat>`", inline=False)
     embed.set_footer(text="Qafqaz Community Bot • Render 7/24 Hosting Ready")
 
